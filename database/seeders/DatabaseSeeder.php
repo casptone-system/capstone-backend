@@ -2,6 +2,9 @@
 
 namespace Database\Seeders;
 
+use App\Models\AccreditationCycle;
+use App\Models\College;
+use App\Models\Program;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -15,11 +18,29 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
-
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        $this->call([
+            RolePermissionSeeder::class,
+            AccreditationAreaSeeder::class,
         ]);
+
+        User::firstOrCreate(
+            ['email' => 'test@example.com'],
+            [
+                'name' => 'Test User',
+                'email' => 'test@example.com',
+                'password' => bcrypt('password'),
+                'email_verified_at' => now(),
+            ]
+        );
+
+        College::factory(5)->create()->each(function ($college) {
+            Program::factory(fake()->numberBetween(2, 5))->create([
+                'college_id' => $college->id,
+            ])->each(function ($program) {
+                AccreditationCycle::factory(fake()->numberBetween(1, 3))->create([
+                    'program_id' => $program->id,
+                ]);
+            });
+        });
     }
 }
