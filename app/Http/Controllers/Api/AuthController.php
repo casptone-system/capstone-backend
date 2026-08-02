@@ -41,14 +41,30 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['nullable', 'string', 'max:255'],
+            'first_name' => ['required_without:name', 'string', 'max:255'],
+            'last_name' => ['required_without:name', 'string', 'max:255'],
+            'middle_name' => ['nullable', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
             'role' => ['sometimes', 'string'],
         ]);
 
+        if (! isset($validated['first_name']) || ! isset($validated['last_name'])) {
+            $nameParts = preg_split('/\s+/', trim($validated['name']));
+            $firstName = $nameParts[0] ?? '';
+            $lastName = count($nameParts) > 1 ? array_pop($nameParts) : $firstName;
+            $middleName = count($nameParts) > 1 ? implode(' ', array_slice($nameParts, 1, -1)) : null;
+        } else {
+            $firstName = $validated['first_name'];
+            $lastName = $validated['last_name'];
+            $middleName = $validated['middle_name'] ?? null;
+        }
+
         $user = User::create([
-            'name' => $validated['name'],
+            'first_name' => $firstName,
+            'middle_name' => $middleName,
+            'last_name' => $lastName,
             'email' => $validated['email'],
             'password' => $validated['password'],
         ]);
