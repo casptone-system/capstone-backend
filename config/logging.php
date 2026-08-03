@@ -105,6 +105,11 @@ return [
             'processors' => [PsrLogMessageProcessor::class],
         ],
 
+        'audit' => [
+            'driver' => 'audit',
+            'level' => env('LOG_LEVEL', 'info'),
+        ],
+
         'syslog' => [
             'driver' => 'syslog',
             'level' => env('LOG_LEVEL', 'debug'),

@@ -14,10 +14,12 @@ use App\Http\Controllers\Api\TaskController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
+Route::middleware(['security', 'audit.api'])->group(function () {
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/register', [AuthController::class, 'register']);
+});
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 
@@ -80,7 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/accreditation-cycles/{cycle}', [ReportController::class, 'accreditation']);
 });
 
-Route::get('/health', function (Request $request) {
+Route::middleware(['security', 'audit.api'])->get('/health', function (Request $request) {
     return response()->json([
         'success' => true,
         'message' => 'API foundation is ready.',

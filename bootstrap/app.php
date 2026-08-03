@@ -14,6 +14,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'api.auth' => \App\Http\Middleware\EnsureApiAuthenticated::class,
+            'security' => \App\Http\Middleware\EnforceSecurityPolicy::class,
+            'rbac' => \App\Http\Middleware\EnforceRbac::class,
+            'audit.api' => \App\Http\Middleware\AuditApiActions::class,
         ]);
         $middleware->use([
             \Illuminate\Http\Middleware\HandleCors::class,

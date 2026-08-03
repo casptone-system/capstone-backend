@@ -7,6 +7,7 @@ use App\Http\Resources\UserResource;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Role;
 
@@ -46,9 +47,16 @@ class AuthController extends Controller
             'last_name' => ['required_without:name', 'string', 'max:255'],
             'middle_name' => ['nullable', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'password' => ['required', 'string', 'min:8'],
+            'password_confirmation' => ['nullable', 'string'],
             'role' => ['sometimes', 'string'],
         ]);
+
+        if ($request->filled('password_confirmation') && $request->input('password') !== $request->input('password_confirmation')) {
+            throw ValidationException::withMessages([
+                'password' => ['The password field confirmation does not match.'],
+            ]);
+        }
 
         if (! isset($validated['first_name']) || ! isset($validated['last_name'])) {
             $nameParts = preg_split('/\s+/', trim($validated['name']));
@@ -62,11 +70,12 @@ class AuthController extends Controller
         }
 
         $user = User::create([
+            'name' => trim($validated['name'] ?? trim($firstName . ($middleName ? ' ' . $middleName : '') . ' ' . $lastName)),
             'first_name' => $firstName,
             'middle_name' => $middleName,
             'last_name' => $lastName,
             'email' => $validated['email'],
-            'password' => $validated['password'],
+            'password' => Hash::make($validated['password']),
         ]);
 
         // Assign role if provided, otherwise default to 'faculty'

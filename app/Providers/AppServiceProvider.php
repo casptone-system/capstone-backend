@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,6 +20,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Log::extend('audit', function ($app, array $config) {
+            return new \Monolog\Logger('audit', [
+                new \Monolog\Handler\StreamHandler(storage_path('logs/audit.log'), \Monolog\Logger::INFO),
+            ]);
+        });
     }
 }
