@@ -14,10 +14,20 @@ class RolePermissionSeeder extends Seeder
 
         $permissions = [
             'view dashboard',
+            'manage users',
+            'manage teams',
+            'invite faculty',
+            'assign chairs',
+            'upload documents',
+            'replace documents',
+            'manage documents',
+            'submit reviews',
             'manage reviews',
             'approve reviews',
+            'request revisions',
             'review reports',
-            'manage users',
+            'view audit logs',
+            'view login history',
         ];
 
         foreach ($permissions as $permission) {
@@ -25,14 +35,60 @@ class RolePermissionSeeder extends Seeder
         }
 
         $roles = [
-            'Super Admin' => ['view dashboard', 'manage reviews', 'approve reviews', 'review reports', 'manage users'],
-            'QA' => ['view dashboard', 'review reports'],
-            'VPAA' => ['view dashboard', 'approve reviews', 'review reports'],
-            'Dean' => ['view dashboard', 'approve reviews', 'review reports'],
-            'Area Chair' => ['view dashboard', 'manage reviews', 'review reports'],
-            'Team Member' => ['view dashboard', 'manage reviews'],
-            'Accreditor' => ['view dashboard', 'review reports'],
-            'faculty' => ['view dashboard'],
+            'Super Administrator' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+            'VPAA' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'QA' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'Dean' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+            ],
+            'Program Chair' => [
+                'view dashboard',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'review reports',
+            ],
+            'Area In-Charge' => [
+                'view dashboard',
+                'manage reviews',
+                'request revisions',
+                'review reports',
+            ],
+            'Faculty' => [
+                'view dashboard',
+                'upload documents',
+                'submit reviews',
+            ],
+            'Accreditor' => [
+                'view dashboard',
+                'review reports',
+            ],
         ];
 
         foreach ($roles as $name => $rolePermissions) {

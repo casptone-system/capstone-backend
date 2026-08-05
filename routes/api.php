@@ -80,6 +80,11 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('reports/colleges/{college}', [ReportController::class, 'college']);
     Route::get('reports/areas/{area}', [ReportController::class, 'area']);
     Route::get('reports/accreditation-cycles/{cycle}', [ReportController::class, 'accreditation']);
+
+    // Audit and login history reporting
+    Route::get('audit-logs', [\App\Http\Controllers\Api\AuditController::class, 'index']);
+    Route::get('audit-logs/summaries', [\App\Http\Controllers\Api\AuditController::class, 'summaries']);
+    Route::get('login-history', [\App\Http\Controllers\Api\AuditController::class, 'loginHistory']);
 });
 
 Route::middleware(['security', 'audit.api'])->get('/health', function (Request $request) {

@@ -14,3 +14,10 @@ Schedule::command('notifications:check-deadline-near')
     ->description('Check for tasks with approaching deadlines and send notifications')
     ->withoutOverlapping()
     ->onOneServer();
+
+// Schedule a daily backup of the database as a demonstration of recovery planning.
+Schedule::command('database:backup --compress=gzip')
+    ->dailyAt('02:00')
+    ->description('Daily compressed database backup')
+    ->withoutOverlapping()
+    ->onOneServer();
