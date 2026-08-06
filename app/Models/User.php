@@ -27,6 +27,10 @@ class User extends Authenticatable
         'last_name',
         'email',
         'password',
+        'phone_number',
+        'birth_date',
+        'program_id',
+        'team_id',
     ];
 
     /**
@@ -58,6 +62,16 @@ class User extends Authenticatable
     public function createdTasks(): HasMany
     {
         return $this->hasMany(Task::class, 'created_by');
+    }
+
+    public function team()
+    {
+        return $this->belongsTo(Team::class, 'team_id');
+    }
+
+    public function program()
+    {
+        return $this->belongsTo(Program::class, 'program_id');
     }
 
     /**

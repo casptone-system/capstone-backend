@@ -49,6 +49,8 @@ class AuthController extends Controller
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
             'password_confirmation' => ['nullable', 'string'],
+            'phone' => ['nullable', 'string', 'max:255'],
+            'birthdate' => ['nullable', 'date'],
             'role' => ['sometimes', 'string'],
         ]);
 
@@ -58,6 +60,7 @@ class AuthController extends Controller
             ]);
         }
 
+        // Determine name parts
         if (! isset($validated['first_name']) || ! isset($validated['last_name'])) {
             $nameParts = preg_split('/\s+/', trim($validated['name']));
             $firstName = $nameParts[0] ?? '';
@@ -69,6 +72,7 @@ class AuthController extends Controller
             $middleName = $validated['middle_name'] ?? null;
         }
 
+        // Create the user record
         $user = User::create([
             'name' => trim($validated['name'] ?? trim($firstName . ($middleName ? ' ' . $middleName : '') . ' ' . $lastName)),
             'first_name' => $firstName,
@@ -76,10 +80,20 @@ class AuthController extends Controller
             'last_name' => $lastName,
             'email' => $validated['email'],
             'password' => Hash::make($validated['password']),
+            'phone_number' => $validated['phone'] ?? null,
+            'birth_date' => $validated['birthdate'] ?? null,
         ]);
 
-        // Assign role if provided, otherwise default to 'faculty'
-        $role = $validated['role'] ?? 'faculty';
+        // Role assignment rules:
+        // - If an authenticated Super Administrator creates the account and provides a role, allow it.
+        // - Otherwise default to 'faculty'. Public registrations cannot assign elevated roles.
+        $creator = $request->user('api');
+        $role = 'faculty';
+
+        if (! empty($validated['role']) && $creator && $creator->hasRole('Super Administrator')) {
+            $role = $validated['role'];
+        }
+
         Role::firstOrCreate(['name' => $role, 'guard_name' => 'web']);
         $user->assignRole($role);
 
@@ -111,5 +125,77 @@ class AuthController extends Controller
             'success' => true,
             'data' => new UserResource($request->user('api')),
         ], 200);
+    }
+
+    public function joinTeam(Request $request)
+    {
+        $user = $request->user('api');
+
+        if (! $user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Please sign in first.',
+            ], 401);
+        }
+
+        $validated = $request->validate([
+            'code' => ['required', 'string', 'size:6'],
+        ]);
+
+        // First try to resolve to a Team by code
+        $code = strtoupper($validated['code']);
+
+        $team = \App\Models\Team::where('code', $code)->first();
+
+        if ($team) {
+            // Assign team and program to user
+            $user->team_id = $team->id;
+            $user->program_id = $team->program_id;
+            $user->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Joined team successfully.',
+                'data' => [
+                    'code' => $code,
+                    'joined' => true,
+                    'team' => [
+                        'id' => $team->id,
+                        'name' => $team->name,
+                        'code' => $team->code,
+                        'program_id' => $team->program_id,
+                    ],
+                    'user' => new UserResource($user),
+                ],
+            ], 200);
+        }
+
+        // Fallback: try Program by code
+        $program = \App\Models\Program::where('code', $code)->first();
+
+        if ($program) {
+            $user->program_id = $program->id;
+            $user->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Joined program successfully.',
+                'data' => [
+                    'code' => $code,
+                    'joined' => true,
+                    'program' => [
+                        'id' => $program->id,
+                        'name' => $program->name,
+                        'code' => $program->code,
+                    ],
+                    'user' => new UserResource($user),
+                ],
+            ], 200);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Invalid invitation code. Please check with your Program Chair or Dean.',
+        ], 404);
     }
 }

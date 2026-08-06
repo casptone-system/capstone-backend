@@ -9,6 +9,9 @@ class UserResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $roles = collect($this->getRoleNames());
+        $primaryRole = $roles->first() ?: null;
+
         return [
             'id' => $this->id,
             'name' => trim(sprintf('%s %s %s', $this->first_name, $this->middle_name ?? '', $this->last_name)),
@@ -16,8 +19,13 @@ class UserResource extends JsonResource
             'middle_name' => $this->middle_name,
             'last_name' => $this->last_name,
             'email' => $this->email,
-            'roles' => $this->getRoleNames(),
+            'phone' => $this->phone_number,
+            'birthdate' => $this->birth_date,
+            'role' => $primaryRole ? strtolower(str_replace(' ', '-', $primaryRole)) : null,
+            'roles' => $roles->values(),
             'permissions' => $this->getPermissionNames(),
+            'teamId' => $this->team_id ?? null,
+            'programId' => $this->program_id ?? null,
         ];
     }
 }

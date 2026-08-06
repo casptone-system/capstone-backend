@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -72,6 +73,14 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
 
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);
+
+    // Super Administrator user listing
+    Route::get('users', [UserController::class, 'index']);
+
+    // Join team using invitation code
+    Route::post('/teams/join', [AuthController::class, 'joinTeam']);
+    // Teams management (Program Chairs / Admins can create teams and codes)
+    Route::apiResource('teams', \App\Http\Controllers\Api\TeamController::class)->only(['index', 'store', 'show']);
 
     // Reports (compliance, program, college, area, accreditation + PDF/Excel exports)
     Route::get('reports', [ReportController::class, 'index']);
