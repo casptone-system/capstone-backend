@@ -326,12 +326,16 @@ class ReviewApiTest extends TestCase
             ->assertJsonCount(2, 'data');
     }
 
-    public function test_unauthenticated_access_is_rejected(): void
-    {
-        auth()->forgetGuards();
 
-        $response = $this->getJson('/api/reviews');
+        public function test_unauthenticated_access_is_rejected(): void
+        {
+            // Remove the authenticated user created in setUp().
+            Sanctum::actingAs(null);
 
-        $response->assertStatus(401);
-    }
+            $response = $this->getJson('/api/reviews');
+
+            $response->assertStatus(401);
+        }
+
+
 }

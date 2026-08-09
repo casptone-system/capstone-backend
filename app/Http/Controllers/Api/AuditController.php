@@ -72,4 +72,19 @@ class AuditController extends Controller
             ],
         ], 200);
     }
+
+    public function sessions(Request $request)
+    {
+        $sessions = \Illuminate\Support\Facades\DB::table('sessions')
+            ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
+            ->orderByDesc('last_activity')
+            ->paginate($request->get('per_page', 15));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sessions retrieved successfully.',
+            'data' => $sessions->items(),
+            'meta' => ['pagination' => $sessions->toArray()],
+        ], 200);
+    }
 }

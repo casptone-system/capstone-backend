@@ -5,28 +5,150 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
+use App\Notifications\LoginVerificationCodeNotification;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
 {
     public function login(Request $request)
+{
+    $validated = $request->validate([
+        'email' => ['required', 'email'],
+        'password' => ['required', 'string'],
+    ]);
+
+    /** @var User|null $user */
+    $user = User::where('email', $validated['email'])->first();
+
+    // Account does not exist
+    if (!$user) {
+        throw ValidationException::withMessages([
+            'email' => ['No existing account found for that email.'],
+        ]);
+    }
+
+    // Check password directly
+    if (!Hash::check($validated['password'], $user->password)) {
+        throw ValidationException::withMessages([
+            'password' => ['Wrong credentials.'],
+        ]);
+    }
+
+    // Optional: prevent inactive/locked accounts from logging in
+    if (isset($user->status) && $user->status === 'inactive') {
+        throw ValidationException::withMessages([
+            'email' => ['This account is inactive.'],
+        ]);
+    }
+
+    if (isset($user->status) && $user->status === 'locked') {
+        throw ValidationException::withMessages([
+            'email' => ['This account is locked. Please contact an administrator.'],
+        ]);
+    }
+
+    if (! $user->hasVerifiedEmail()) {
+        throw ValidationException::withMessages([
+            'email' => ['Please verify your email address before signing in.'],
+        ]);
+    }
+
+    // IP-based login throttle: limit attempts per IP per minute
+    $ip = $request->ip() ?? 'unknown';
+    $ipKey = 'login_ip_attempts:' . $ip;
+    $ipCount = (int) Cache::get($ipKey, 0);
+    $ipLimit = $this->getLoginIpLimitPerMinute();
+    if ($ipCount >= $ipLimit) {
+        throw ValidationException::withMessages([
+            'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
+        ]);
+    }
+    Cache::put($ipKey, $ipCount + 1, 60);
+
+    $challenge = $this->createLoginChallenge($user);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'A verification code has been sent to your email address. Enter the code to complete sign in.',
+        'data' => [
+            'challenge_token' => $challenge['challenge_token'],
+            'expires_in' => $challenge['expires_in'],
+            'email' => $user->email,
+        ],
+    ], 200);
+}
+
+    public function verifyTwoFactor(Request $request)
     {
         $validated = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required', 'string'],
+            'challenge_token' => ['required', 'string'],
+            'code' => ['required', 'string', 'size:6'],
         ]);
 
-        if (! Auth::attempt($validated)) {
+        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
+        $challenge = Cache::get($cacheKey);
+
+        if (! $challenge) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+                'challenge_token' => ['The login verification token is invalid or has expired. Please try signing in again.'],
             ]);
         }
 
-        $user = Auth::user();
+        if ((int) ($challenge['attempts'] ?? 0) >= 5) {
+            Cache::forget($cacheKey);
+            throw ValidationException::withMessages([
+                'code' => ['Too many invalid attempts. Please restart the login process.'],
+            ]);
+        }
+
+        $codeMatch = hash_equals($challenge['code_hash'], hash('sha256', $validated['code']));
+        if (! $codeMatch) {
+            $challenge['attempts'] = ((int) ($challenge['attempts'] ?? 0)) + 1;
+            Cache::put($cacheKey, $challenge, $this->getLoginChallengeTtl());
+
+            throw ValidationException::withMessages([
+                'code' => ['The verification code is incorrect. Please try again.'],
+            ]);
+        }
+
+        $user = User::find($challenge['user_id']);
+        Cache::forget($cacheKey);
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'challenge_token' => ['The login verification token is invalid. Please try again.'],
+            ]);
+        }
+
+        if (isset($user->status) && $user->status === 'inactive') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is inactive.'],
+            ]);
+        }
+
+        if (isset($user->status) && $user->status === 'locked') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is locked. Please contact an administrator.'],
+            ]);
+        }
+
+        if (! $user->hasVerifiedEmail()) {
+            throw ValidationException::withMessages([
+                'email' => ['Please verify your email address before signing in.'],
+            ]);
+        }
+
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
@@ -39,9 +161,302 @@ class AuthController extends Controller
         ], 200);
     }
 
-    public function register(Request $request)
+    private function createLoginChallenge(User $user): array
+    {
+        $challengeToken = Str::random(64);
+        $code = (string) random_int(100000, 999999);
+        $expiresIn = $this->getLoginChallengeTtl();
+        $cacheKey = $this->getLoginChallengeCacheKey($challengeToken);
+
+        Cache::put($cacheKey, [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'code_hash' => hash('sha256', $code),
+            'attempts' => 0,
+            'resend_count' => 0,
+        ], $expiresIn);
+
+        $this->sendLoginVerificationCode($user, $code, (int) ($expiresIn / 60));
+
+        return [
+            'challenge_token' => $challengeToken,
+            'expires_in' => $expiresIn,
+        ];
+    }
+
+    private function getLoginChallengeCacheKey(string $challengeToken): string
+    {
+        return 'login_challenge:' . $challengeToken;
+    }
+
+    private function getLoginChallengeTtl(): int
+    {
+        return 300; // 5 minutes
+    }
+
+    private function getResendCooldownSeconds(): int
+    {
+        return 30; // 30 second cooldown between resends
+    }
+
+    private function getResendIpLimitPerMinute(): int
+    {
+        return 6; // allow up to 6 resend requests per IP per minute
+    }
+
+    private function getLoginIpLimitPerMinute(): int
+    {
+        return 12; // allow up to 12 login attempts per IP per minute in tests
+    }
+
+    private function sendLoginVerificationCode(User $user, string $code, int $expiresInMinutes): void
+    {
+        $user->notify(new LoginVerificationCodeNotification($code, $expiresInMinutes));
+    }
+
+    public function resendTwoFactor(Request $request)
     {
         $validated = $request->validate([
+            'challenge_token' => ['required', 'string'],
+        ]);
+
+        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
+        $challenge = Cache::get($cacheKey);
+
+        if (! $challenge) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The login verification token is invalid or has expired. Please sign in again.',
+            ], 422);
+        }
+
+        $resendCount = (int) ($challenge['resend_count'] ?? 0);
+        if ($resendCount >= 3) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You have reached the maximum number of resends. Please sign in again.',
+            ], 429);
+        }
+
+        // Enforce a short cooldown between resends (per challenge)
+        $now = time();
+        $lastResend = isset($challenge['last_resend_at']) ? (int) $challenge['last_resend_at'] : 0;
+        $cooldown = $this->getResendCooldownSeconds();
+        if ($lastResend && ($now - $lastResend) < $cooldown) {
+            $remaining = $cooldown - ($now - $lastResend);
+            Log::debug('resendTwoFactor blocked', ['reason' => 'cooldown', 'remaining' => $remaining, 'challenge' => $cacheKey]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Please wait ' . $remaining . ' seconds before requesting another code.',
+            ], 429);
+        }
+
+        // IP-based global throttle: limit number of resend requests per IP per minute
+        $ip = $request->ip() ?? 'unknown'
+        ;
+        $ipKey = 'resend_2fa_ip:' . $ip;
+        $ipCount = (int) Cache::get($ipKey, 0);
+        $ipLimit = $this->getResendIpLimitPerMinute();
+        if ($ipCount >= $ipLimit) {
+            Log::debug('resendTwoFactor blocked', ['reason' => 'ip_limit', 'ip' => $ip, 'count' => $ipCount]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many resend requests from your IP address. Please wait and try again.',
+            ], 429);
+        }
+
+        Cache::put($ipKey, $ipCount + 1, 60);
+
+        // Generate a new code and reset attempts
+        $code = (string) random_int(100000, 999999);
+        $challenge['code_hash'] = hash('sha256', $code);
+        $challenge['attempts'] = 0;
+        $challenge['resend_count'] = $resendCount + 1;
+        $challenge['last_resend_at'] = $now;
+
+        $ttl = $this->getLoginChallengeTtl();
+        Cache::put($cacheKey, $challenge, $ttl);
+
+        // Send code
+        $this->sendLoginVerificationCode(User::find($challenge['user_id']), $code, (int) ($ttl / 60));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Verification code resent.',
+            'expires_in' => $ttl,
+            'resend_count' => $challenge['resend_count'],
+        ], 200);
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        $status = Password::sendResetLink($validated);
+
+        if ($status === Password::RESET_LINK_SENT) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Password reset link sent to your email address.',
+            ], 200);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => __($status),
+        ], 422);
+    }
+
+    public function checkSmtpSettings(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        if ($this->isSmtpConfigInvalid()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'SMTP is not configured correctly. Set MAIL_MAILER=smtp, MAIL_USERNAME, and MAIL_PASSWORD in .env using a valid Gmail address and app password.',
+            ], 422);
+        }
+
+        try {
+            Mail::raw(
+                'This is a test email from ADAMS to confirm that SMTP is configured correctly. If you received this email, SMTP delivery is working.',
+                function ($message) use ($validated) {
+                    $message->to($validated['email'])
+                        ->subject('ADAMS SMTP Configuration Test');
+                }
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Test email sent successfully. Please check your inbox or spam folder.',
+            ], 200);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => 'SMTP check failed. Please verify your mail settings and credentials.',
+                'error' => $exception->getMessage(),
+            ], 422);
+        }
+    }
+
+    private function isSmtpConfigInvalid(): bool
+    {
+        $defaultMailer = config('mail.default');
+        $username = config('mail.mailers.smtp.username');
+        $password = config('mail.mailers.smtp.password');
+
+        return $defaultMailer !== 'smtp'
+            || empty($username)
+            || empty($password)
+            || ! str_contains($username, '@')
+            || str_contains($username, 'your-gmail')
+            || str_contains($password, 'your-gmail')
+            || str_contains($password, 'password');
+    }
+
+    public function resendVerificationEmail(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        $user = User::where('email', $validated['email'])->first();
+
+        if (! $user) {
+            return response()->json([
+                'success' => true,
+                'message' => 'If your account exists and is not already verified, we have sent a verification link to your email.',
+            ], 200);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'This email address is already verified. Please sign in.',
+            ], 200);
+        }
+
+        $user->sendEmailVerificationNotification();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Verification email resent. Please check your inbox and spam folder.',
+        ], 200);
+    }
+
+    public function verifyEmail(Request $request, string $id, string $hash)
+    {
+        $frontendUrl = env('FRONTEND_URL', config('app.url'));
+        $user = User::find($id);
+        $baseRedirect = rtrim($frontendUrl, '/') . '/email-verified?status=invalid';
+
+        if (! $request->hasValidSignature()) {
+            $redirectUrl = $baseRedirect;
+            if ($user) {
+                $redirectUrl .= '&email=' . urlencode($user->email);
+            }
+
+            return redirect()->away($redirectUrl);
+        }
+
+        if (! $user) {
+            return redirect()->away($baseRedirect);
+        }
+
+        if (! hash_equals((string) $hash, sha1($user->getEmailForVerification()))) {
+            $redirectUrl = $baseRedirect . '&email=' . urlencode($user->email);
+            return redirect()->away($redirectUrl);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=already_verified');
+        }
+
+        $user->markEmailAsVerified();
+
+        return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=success');
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $validated = $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $status = Password::reset(
+            $validated,
+            function (User $user, string $password) {
+                $user->password = Hash::make($password);
+                $user->setRememberToken(Str::random(60));
+                $user->save();
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status === Password::PASSWORD_RESET) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Password has been reset successfully.',
+            ], 200);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => __($status),
+        ], 422);
+    }
+
+    public function register(Request $request)
+    {
+        try {
+            $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
             'first_name' => ['required_without:name', 'string', 'max:255'],
             'last_name' => ['required_without:name', 'string', 'max:255'],
@@ -52,12 +467,23 @@ class AuthController extends Controller
             'phone' => ['nullable', 'string', 'max:255'],
             'birthdate' => ['nullable', 'date'],
             'role' => ['sometimes', 'string'],
+            'profile_photo' => ['nullable', 'image', 'max:10240'],
         ]);
-
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::debug('Registration validation failed', ['errors' => $e->errors(), 'input' => $request->all()]);
+            throw $e;
+        }
         if ($request->filled('password_confirmation') && $request->input('password') !== $request->input('password_confirmation')) {
             throw ValidationException::withMessages([
                 'password' => ['The password field confirmation does not match.'],
             ]);
+        }
+
+        if ($this->isSmtpConfigInvalid()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Email is not configured correctly. Update MAIL_USERNAME and MAIL_PASSWORD in .env and restart the app.',
+            ], 422);
         }
 
         // Determine name parts
@@ -72,40 +498,104 @@ class AuthController extends Controller
             $middleName = $validated['middle_name'] ?? null;
         }
 
-        // Create the user record
-        $user = User::create([
-            'name' => trim($validated['name'] ?? trim($firstName . ($middleName ? ' ' . $middleName : '') . ' ' . $lastName)),
-            'first_name' => $firstName,
-            'middle_name' => $middleName,
-            'last_name' => $lastName,
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'phone_number' => $validated['phone'] ?? null,
-            'birth_date' => $validated['birthdate'] ?? null,
-        ]);
+        if ($request->hasFile('profile_photo')) {
+            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
+        } else {
+            $profilePhotoPath = null;
+        }
+
+        DB::beginTransaction();
+
+        try {
+            // Create the user record
+            $user = User::create([
+                'name' => trim($validated['name'] ?? trim($firstName . ($middleName ? ' ' . $middleName : '') . ' ' . $lastName)),
+                'first_name' => $firstName,
+                'middle_name' => $middleName,
+                'last_name' => $lastName,
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'phone_number' => $validated['phone'] ?? null,
+                'birth_date' => $validated['birthdate'] ?? null,
+                'profile_photo' => $profilePhotoPath,
+            ]);
+
+            // Role assignment rules:
+            // - Only authenticated Super Administrators may create accounts with an elevated role.
+            // - Otherwise default to the standard faculty role.
+            $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
+            $role = 'faculty';
+            $isSuperAdmin = $creator && (
+                $creator->hasRole('Super Administrator') ||
+                $creator->hasRole('Super Admin') ||
+                $creator->hasRole('super administrator')
+            );
+
+            if (! empty($validated['role']) && $isSuperAdmin) {
+                $role = $validated['role'];
+            }
+
+            $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
+            Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+            $user->assignRole($roleName);
+
+            try {
+                $user->sendEmailVerificationNotification();
+            } catch (\Exception $e) {
+                DB::rollBack();
+                if ($profilePhotoPath) {
+                    Storage::disk('public')->delete($profilePhotoPath);
+                }
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to send verification email. Please check mail settings and try again.',
+                    'error' => $e->getMessage(),
+                ], 500);
+            }
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            if (! empty($profilePhotoPath)) {
+                Storage::disk('public')->delete($profilePhotoPath);
+            }
+            throw $e;
+        }
 
         // Role assignment rules:
-        // - If an authenticated Super Administrator creates the account and provides a role, allow it.
-        // - Otherwise default to 'faculty'. Public registrations cannot assign elevated roles.
-        $creator = $request->user('api');
+        // - Only authenticated Super Administrators may create accounts with an elevated role.
+        // - Otherwise default to the standard faculty role.
+        $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
         $role = 'faculty';
+        $isSuperAdmin = $creator && (
+            $creator->hasRole('Super Administrator') ||
+            $creator->hasRole('Super Admin') ||
+            $creator->hasRole('super administrator')
+        );
 
-        if (! empty($validated['role']) && $creator && $creator->hasRole('Super Administrator')) {
+        if (! empty($validated['role']) && $isSuperAdmin) {
             $role = $validated['role'];
         }
 
-        Role::firstOrCreate(['name' => $role, 'guard_name' => 'web']);
-        $user->assignRole($role);
+        $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
+        Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+        $user->assignRole($roleName);
 
-        $token = $user->createToken('api-token')->plainTextToken;
+        $token = null;
+        if ($creator && $isSuperAdmin) {
+            $token = $user->createToken('api-token')->plainTextToken;
+        }
+
+        $responseData = ['user' => new UserResource($user)];
+        if ($token) {
+            $responseData['token'] = $token;
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful.',
-            'data' => [
-                'token' => $token,
-                'user' => new UserResource($user),
-            ],
+            'message' => 'Registration successful. Please verify your email before signing in.',
+            'data' => $responseData,
         ], 201);
     }
 

@@ -107,10 +107,14 @@ class AuditLogService
 
     protected function recordLoginHistory(?int $userId, ?string $email, string $status, Request $request): void
     {
+        $loginStatus = in_array($status, ['failed', 'success', 'logout'], true)
+            ? $status
+            : 'failed';
+
         LoginHistory::create([
             'user_id' => $userId,
             'email' => $email,
-            'status' => $status,
+            'status' => $loginStatus,
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
             'occurred_at' => now(),

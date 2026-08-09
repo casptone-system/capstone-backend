@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Team extends Model
 {
@@ -17,13 +19,18 @@ class Team extends Model
         'expires_at',
     ];
 
-    public function program()
+    public function program(): BelongsTo
     {
         return $this->belongsTo(Program::class, 'program_id');
     }
 
-    public function creator()
+    public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function members(): HasMany
+    {
+        return $this->hasMany(User::class, 'team_id');
     }
 }

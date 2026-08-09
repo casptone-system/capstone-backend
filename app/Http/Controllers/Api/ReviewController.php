@@ -12,6 +12,7 @@ use App\Notifications\ReviewApprovedNotification;
 use App\Notifications\ReviewRejectedNotification;
 use App\Notifications\ReviewRequestedNotification;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class ReviewController extends Controller
 {
@@ -205,7 +206,7 @@ class ReviewController extends Controller
         // Determine the role based on the action and current status
         $role = $this->getRoleForAction($currentStatus, $action);
 
-        $newStatus = self::TRANSITIONS[$currentStatus][$action];
+        $newStatus = $this->resolveNextStatus($review, $action);
 
         // Update timestamps
         $updates = ['current_status' => $newStatus];
@@ -217,6 +218,14 @@ class ReviewController extends Controller
         }
 
         $review->update($updates);
+
+        Log::info('review-transition', [
+            'review_id' => $review->id,
+            'current_status' => $currentStatus,
+            'action' => $action,
+            'new_status' => $newStatus,
+            'updated_status' => $review->fresh()->current_status,
+        ]);
 
         // Create a comment record for this action
         $review->comments()->create([
@@ -231,14 +240,46 @@ class ReviewController extends Controller
         // Send notifications based on the action
         $this->sendReviewNotifications($request, $review, $action, $role, $comment, $currentStatus);
 
+        $resourcePayload = (new ReviewResource($review->load('area', 'cycle', 'submitter', 'comments.user')))->resolve();
+        Log::info('transition-response', ['payload' => $resourcePayload]);
+
         // If the review is now Revision Requested, reset back to Submitted logic
         // (already handled via the transition table)
 
         return response()->json([
             'success' => true,
             'message' => $successMessage,
-            'data' => new ReviewResource($review->load('area', 'cycle', 'submitter', 'comments.user')),
+            'data' => $resourcePayload,
         ], 200);
+    }
+
+    /**
+     * Resolve the next review status for the specified action.
+     */
+    private function resolveNextStatus(Review $review, string $action): string
+    {
+        $currentStatus = $review->current_status;
+
+        if ($action === 'approve') {
+            return match ($currentStatus) {
+                'Submitted' => 'Area Approved',
+                'Area Approved' => 'Dean Approved',
+                'Dean Approved' => 'QA Approved',
+                'QA Approved' => 'VPAA Approved',
+                'VPAA Approved' => 'Ready',
+                default => $currentStatus,
+            };
+        }
+
+        if ($action === 'revision_request') {
+            return 'Revision Requested';
+        }
+
+        if ($action === 'reject') {
+            return 'Rejected';
+        }
+
+        return self::TRANSITIONS[$currentStatus][$action] ?? $currentStatus;
     }
 
     /**

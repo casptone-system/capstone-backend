@@ -34,10 +34,7 @@ return new class extends Migration
             $table->timestamp('created_at')->useCurrent()->index();
             $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate();
 
-            $table->unique(
-                ['user_id', 'event', 'created_at'],
-                'audit_logs_user_event_created_unique'
-            );
+            $table->index(['user_id', 'event', 'created_at']);
         });
 
         Schema::create('audit_log_details', function (Blueprint $table) {

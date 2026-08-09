@@ -7,9 +7,11 @@ use App\Http\Controllers\Api\CollegeController;
 use App\Http\Controllers\Api\ProgramController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\DeanController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
+use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
@@ -17,7 +19,14 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware(['security', 'audit.api'])->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword']);
+    Route::post('/auth/email/check', [AuthController::class, 'checkSmtpSettings']);
+    Route::post('/auth/email/resend', [AuthController::class, 'resendVerificationEmail']);
+    Route::post('/auth/verify-2fa', [AuthController::class, 'verifyTwoFactor']);
+    Route::post('/auth/resend-2fa', [AuthController::class, 'resendTwoFactor']);
     Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/auth/reset-password', [AuthController::class, 'resetPassword']);
+    Route::get('/auth/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
 });
 
 Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(function () {
@@ -74,8 +83,46 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);
 
-    // Super Administrator user listing
+    Route::get('dean/dashboard', [DeanController::class, 'dashboard']);
+    Route::get('dean/programs', [DeanController::class, 'programs']);
+
     Route::get('users', [UserController::class, 'index']);
+
+    // Super Administrator user management and administration
+    Route::get('admin/dashboard', [UserController::class, 'dashboard']);
+    Route::get('admin/users', [UserController::class, 'index']);
+    Route::post('admin/users', [UserController::class, 'store']);
+    Route::get('admin/users/{id}', [UserController::class, 'show']);
+    Route::put('admin/users/{id}', [UserController::class, 'update']);
+    Route::delete('admin/users/{id}', [UserController::class, 'destroy']);
+    Route::post('admin/users/{id}/restore', [UserController::class, 'restore']);
+    Route::post('admin/users/{id}/lock', [UserController::class, 'lock']);
+    Route::post('admin/users/{id}/unlock', [UserController::class, 'unlock']);
+    Route::post('admin/users/{id}/activate', [UserController::class, 'activate']);
+    Route::post('admin/users/{id}/deactivate', [UserController::class, 'deactivate']);
+    Route::post('admin/users/{id}/reset-password', [UserController::class, 'resetPassword']);
+
+    Route::get('admin/roles', [UserController::class, 'roles']);
+    Route::post('admin/roles', [UserController::class, 'storeRole']);
+    Route::get('admin/roles/{id}/permissions', [UserController::class, 'rolePermissions']);
+    Route::get('admin/permissions', [UserController::class, 'permissions']);
+    Route::post('admin/roles/{id}/permissions', [UserController::class, 'assignPermissions']);
+
+    Route::get('admin/system/settings', [SystemController::class, 'settings']);
+    Route::post('admin/system/backup', [SystemController::class, 'backup']);
+
+    Route::get('admin/audit-logs', [
+        	App\Http\Controllers\Api\AuditController::class,
+        'index'
+    ]);
+    Route::get('admin/login-history', [
+        	App\Http\Controllers\Api\AuditController::class,
+        'loginHistory'
+    ]);
+    Route::get('admin/sessions', [
+        	App\Http\Controllers\Api\AuditController::class,
+        'sessions'
+    ]);
 
     // Join team using invitation code
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
