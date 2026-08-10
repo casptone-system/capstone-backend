@@ -32,6 +32,7 @@ Route::middleware(['security', 'audit.api'])->group(function () {
 Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::post('/me/profile-photo', [AuthController::class, 'updateProfilePhoto']);
 
     // Colleges (GET /colleges, POST /colleges + full CRUD)
     Route::apiResource('colleges', CollegeController::class);
@@ -128,6 +129,13 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
     // Teams management (Program Chairs / Admins can create teams and codes)
     Route::apiResource('teams', \App\Http\Controllers\Api\TeamController::class)->only(['index', 'store', 'show']);
+
+    // Program invitations
+    Route::get('programs/{program}/invitations', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'index']);
+    Route::post('programs/{program}/invitations', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'store']);
+    Route::post('invitations/{token}/resend', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'resend']);
+    Route::post('invitations/{token}/revoke', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'revoke']);
+    Route::post('invitations/{token}/accept', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'accept']);
 
     // Reports (compliance, program, college, area, accreditation + PDF/Excel exports)
     Route::get('reports', [ReportController::class, 'index']);

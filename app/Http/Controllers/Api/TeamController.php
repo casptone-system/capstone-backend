@@ -63,7 +63,8 @@ class TeamController extends Controller
         $isSuperAdmin = $user && (
             $user->hasRole('Super Administrator') ||
             $user->hasRole('Super Admin') ||
-            $user->hasRole('super administrator')
+            $user->hasRole('super administrator') ||
+            $user->hasRole('superadmin')
         );
 
         if (! $user || (! $user->hasRole('Program Chair') && ! $isSuperAdmin && ! $user->can('manage teams'))) {

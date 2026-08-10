@@ -1,0 +1,212 @@
+PHPUnit 11.5.55 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.12
+Configuration: C:\capstone\backend\backend-app\phpunit.xml
+
+...............................................................  63 / 174 ( 36%)
+............................................................... 126 / 174 ( 72%)
+................................................                174 / 174 (100%)
+
+Time: 01:20.953, Memory: 76.00 MB
+
+Accreditation Area Api (Tests\Feature\AccreditationAreaApi)
+ ✔ Index returns paginated accreditation areas
+ ✔ Index can filter by cycle id
+ ✔ Index can filter by status
+ ✔ Index can search by name
+ ✔ Store creates accreditation area
+ ✔ Store validates required fields
+ ✔ Store validates status enum
+ ✔ Show returns accreditation area details
+ ✔ Update modifies accreditation area
+ ✔ Destroy deletes accreditation area
+ ✔ Assign chair
+ ✔ Assign chair validates required fields
+ ✔ Assign chair validates user exists
+ ✔ Add member
+ ✔ Add member defaults to member role
+ ✔ Add member validates required fields
+ ✔ Add member validates user exists
+ ✔ Remove member
+ ✔ Remove member returns 404 if member not in area
+ ✔ Progress returns area progress
+ ✔ Progress shows no chair when not assigned
+ ✔ Unauthenticated access is rejected
+
+Accreditation Cycle Api (Tests\Feature\AccreditationCycleApi)
+ ✔ Index returns paginated accreditation cycles
+ ✔ Index can filter by program id
+ ✔ Index can filter by level
+ ✔ Index can filter by status
+ ✔ Store creates accreditation cycle
+ ✔ Store validates required fields
+ ✔ Store validates level enum
+ ✔ Store validates status enum
+ ✔ Show returns accreditation cycle
+ ✔ Update modifies accreditation cycle
+ ✔ Destroy deletes accreditation cycle
+ ✔ History returns program accreditation history
+ ✔ Dashboard returns metrics
+ ✔ Dashboard shows current level expiry and readiness
+ ✔ Dashboard shows not started for program without cycles
+ ✔ Readiness accessor maps statuses correctly
+ ✔ Unauthenticated access is rejected
+
+Auth Api (Tests\Feature\AuthApi)
+ ✔ Login returns token and user
+ ✔ Super admin can create user
+ ✔ Register requires super admin
+ ✔ Me requires authentication
+
+Auth Flow (Tests\Feature\AuthFlow)
+ ✔ Registration sends verification email
+ ✔ Unverified account cannot login
+ ✔ Successful login with 2fa and token only after verification
+ ✔ Invalid 2fa code is rejected
+ ✔ Expired 2fa code is rejected
+ ✔ Maximum 2fa attempts blocks
+ ✔ Resend code throttling and limits
+ ✔ Login ip throttling
+ ✔ Token not issued before 2fa
+ ✔ Logout and protected route access
+
+Dashboard Api (Tests\Feature\DashboardApi)
+ ✔ Dashboard returns all metrics
+ ✔ Dashboard can filter by program id
+ ✔ Dashboard returns zero metrics when no data
+ ✔ Dashboard breakdowns are accurate
+ ✔ Unauthenticated access is rejected
+
+Document Api (Tests\Feature\DocumentApi)
+ ✔ Index returns paginated documents
+ ✔ Index can filter by program id
+ ✔ Index can filter by area id
+ ✔ Index can filter by status
+ ✔ Index can filter by school year
+ ✔ Index can search by title
+ ✔ Store uploads document
+ ✔ Store validates required fields
+ ✔ Store validates file size
+ ✔ Show returns document details
+ ✔ Update modifies document metadata
+ ✔ Update can change status to archived
+ ✔ Destroy deletes document and files
+ ✔ Replace creates new version
+ ✔ Replace validates file required
+ ✔ Versions returns version history
+ ✔ Download returns file
+ ✔ Download with specific version
+ ✔ Download returns 404 if version not found
+ ✔ Unauthenticated access is rejected
+
+Example (Tests\Feature\Example)
+ ✔ The application returns a successful response
+
+Example (Tests\Unit\Example)
+ ✔ That true is true
+
+Notification Api (Tests\Feature\NotificationApi)
+ ✔ Index returns paginated notifications
+ ✔ Index can filter unread notifications
+ ✔ Index can filter read notifications
+ ✔ Index can filter by type
+ ✔ Show returns notification details
+ ✔ Show returns 404 for nonexistent notification
+ ✔ Show returns 404 for other users notification
+ ✔ Mark as read
+ ✔ Mark as read returns 404 for nonexistent
+ ✔ Mark all as read
+ ✔ Unread count
+ ✔ Unread count returns zero when no notifications
+ ✔ Destroy deletes notification
+ ✔ Destroy returns 404 for nonexistent
+ ✔ Task assigned notification sent on assign members
+ ✔ Task assigned notification not sent for existing assignment
+ ✔ Document uploaded notification sent on upload
+ ✔ Review requested notification sent on submit
+ ✔ Review approved notification sent on approve
+ ✔ Review rejected notification sent on reject
+ ✔ Deadline near command sends notifications
+ ✔ Deadline near command skips completed tasks
+ ✔ Deadline near command dry run
+ ✔ Unauthenticated access is rejected
+
+Report Api (Tests\Feature\ReportApi)
+ ✔ Report index lists all report types
+ ✔ Compliance report returns json
+ ✔ Compliance report calculates metrics correctly
+ ✔ Compliance report supports program filter
+ ✔ Compliance report returns zero when no data
+ ✔ Compliance report pdf export
+ ✔ Compliance report excel export
+ ✔ Program report returns json
+ ✔ Program report includes cycles and areas
+ ✔ Program report pdf export
+ ✔ Program report excel export
+ ✔ Program report 404 for nonexistent program
+ ✔ College report returns json
+ ✔ College report pdf export
+ ✔ College report excel export
+ ✔ College report 404 for nonexistent college
+ ✔ Area report returns json
+ ✔ Area report pdf export
+ ✔ Area report excel export
+ ✔ Area report 404 for nonexistent area
+ ✔ Accreditation report returns json
+ ✔ Accreditation report pdf export
+ ✔ Accreditation report excel export
+ ✔ Accreditation report 404 for nonexistent cycle
+ ✔ Unauthenticated access is rejected
+
+Review Api (Tests\Feature\ReviewApi)
+ ✔ Index returns paginated reviews
+ ✔ Index can filter by area id
+ ✔ Index can filter by cycle id
+ ✔ Index can filter by status
+ ✔ Store creates review
+ ✔ Store validates required fields
+ ✔ Store prevents duplicate active review
+ ✔ Show returns review details
+ ✔ Submit transitions draft to submitted
+ ✔ Approve transitions submitted to area approved
+ ✔ Full workflow approval path
+ ✔ Request revision requires comment
+ ✔ Request revision transitions back
+ ✔ Reject requires comment
+ ✔ Reject transitions to rejected
+ ✔ Revision requested can be resubmitted
+ ✔ Invalid transition returns error
+ ✔ Comments returns review comments
+ ✔ Unauthenticated access is rejected
+
+Security Middleware (Tests\Feature\SecurityMiddleware)
+ ✔ Non https requests are rejected when https enforcement is enabled
+ ✔ Blocked ips are rejected
+
+Task Api (Tests\Feature\TaskApi)
+ ✔ Index returns paginated tasks
+ ✔ Index can filter by area id
+ ✔ Index can filter by status
+ ✔ Index can filter by priority
+ ✔ Index can filter by assigned to
+ ✔ Index can search by title
+ ✔ Store creates task
+ ✔ Store validates required fields
+ ✔ Store validates priority enum
+ ✔ Store validates status enum
+ ✔ Show returns task details
+ ✔ Update modifies task
+ ✔ Destroy deletes task
+ ✔ Assign members
+ ✔ Assign members validates required fields
+ ✔ Assign members validates user exists
+ ✔ Assign members does not duplicate assignments
+ ✔ Remove assignment
+ ✔ Remove assignment returns 404 if not belonging to task
+ ✔ Mark complete
+ ✔ Progress returns task progress
+ ✔ Progress shows overdue when past due date
+ ✔ Progress shows not overdue when completed
+ ✔ Unauthenticated access is rejected
+
+OK (174 tests, 989 assertions)

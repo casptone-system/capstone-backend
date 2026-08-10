@@ -18,15 +18,22 @@ class AuthApiTest extends TestCase
             'password' => 'secret123',
         ]);
 
+        // Login triggers a 2FA challenge; follow verify flow to obtain token
         $response = $this->postJson('/api/login', [
             'email' => 'api@example.com',
             'password' => 'secret123',
         ]);
 
-        $response->assertStatus(200)
-            ->assertJsonPath('success', true)
-            ->assertJsonPath('data.user.email', 'api@example.com')
-            ->assertJsonStructure(['data' => ['token', 'user']]);
+        $response->assertStatus(200)->assertJsonPath('success', true);
+        $challenge = $response->json('data');
+        $this->assertArrayHasKey('challenge_token', $challenge);
+
+        // Make the verification deterministic by setting known code in cache
+        $cacheKey = 'login_challenge:' . $challenge['challenge_token'];
+        \Illuminate\Support\Facades\Cache::put($cacheKey, array_merge(\Illuminate\Support\Facades\Cache::get($cacheKey, []), ['code_hash' => hash('sha256', '000000')]), 300);
+
+        $verify = $this->postJson('/api/auth/verify-2fa', ['challenge_token' => $challenge['challenge_token'], 'code' => '000000']);
+        $verify->assertStatus(200)->assertJsonPath('success', true)->assertJsonPath('data.user.email', 'api@example.com');
     }
 
     public function test_super_admin_can_create_user(): void

@@ -84,12 +84,150 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
         return $this->hasMany(TaskAssignment::class, 'user_id');
     }
 
+    public function programMemberships()
+    {
+        return $this->hasMany(ProgramMember::class, 'user_id');
+    }
+
+    public function programs()
+    {
+        return $this->belongsToMany(Program::class, 'program_members');
+    }
+
+    public function invitationsSent()
+    {
+        return $this->hasMany(Invitation::class, 'invited_by');
+    }
+
     /**
      * Get the documents uploaded by the user.
      */
     public function uploadedDocuments(): HasMany
     {
         return $this->hasMany(Document::class, 'uploaded_by');
+    }
+
+    public function hasCanonicalRole(string $role): bool
+    {
+        $normalizedRole = $this->normalizeRoleName($role);
+
+        return $this->getRoleNames()
+            ->map(fn (string $name) => $this->normalizeRoleName($name))
+            ->contains($normalizedRole);
+    }
+
+    public function hasAnyCanonicalRole(array $roles): bool
+    {
+        $normalizedRoles = array_map([$this, 'normalizeRoleName'], $roles);
+
+        return $this->getRoleNames()
+            ->map(fn (string $name) => $this->normalizeRoleName($name))
+            ->intersect($normalizedRoles)
+            ->isNotEmpty();
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        return $this->hasCanonicalRole('superadmin');
+    }
+
+    public function isQA(): bool
+    {
+        return $this->hasCanonicalRole('qa');
+    }
+
+    public function isVPAA(): bool
+    {
+        return $this->hasCanonicalRole('vpaa/di') || $this->hasCanonicalRole('vpaa');
+    }
+
+    public function isDean(): bool
+    {
+        return $this->hasCanonicalRole('dean');
+    }
+
+    public function isProgramChair(): bool
+    {
+        return $this->hasCanonicalRole('program-chair');
+    }
+
+    public function isAreaIncharge(): bool
+    {
+        return $this->hasCanonicalRole('area-incharge');
+    }
+
+    public function isFaculty(): bool
+    {
+        return $this->hasCanonicalRole('faculty');
+    }
+
+    public function getEffectiveProgramId(): ?int
+    {
+        if ($this->program_id) {
+            return $this->program_id;
+        }
+
+        return $this->team?->program_id;
+    }
+
+    public function getEffectiveCollegeId(): ?int
+    {
+        $programId = $this->getEffectiveProgramId();
+        if (! $programId) {
+            return null;
+        }
+
+        return Program::find($programId)?->college_id;
+    }
+
+    public function isAssignedToArea(AccreditationArea $area): bool
+    {
+        if ($area->chair_id === $this->id) {
+            return true;
+        }
+
+        return AreaMember::where('area_id', $area->id)
+            ->where('user_id', $this->id)
+            ->exists();
+    }
+
+    public function assignedAreaIds()
+    {
+        return AreaMember::where('user_id', $this->id)->pluck('area_id');
+    }
+
+    protected function normalizeRoleName(string $role): string
+    {
+        $base = trim(strtolower($role));
+        $base = str_replace(['_', ' '], '-', $base);
+        $base = preg_replace('/-+/', '-', $base) ?: $base;
+
+        if (str_contains($base, 'vpaa') && str_contains($base, 'di')) {
+            return 'vpaa/di';
+        }
+
+        if (str_starts_with($base, 'super') || str_contains($base, 'super-administrator') || str_contains($base, 'superadministrator')) {
+            return 'superadmin';
+        }
+
+        if (str_contains($base, 'area') && (str_contains($base, 'in-charge') || str_contains($base, 'incharge'))) {
+            return 'area-incharge';
+        }
+
+        if ($base === 'programchair') {
+            return 'program-chair';
+        }
+
+        return $base;
+    }
+
+    public function getProfilePhotoUrlAttribute(): ?string
+    {
+        if (empty($this->profile_photo)) {
+            return null;
+        }
+
+        return asset('storage/' . ltrim($this->profile_photo, '/'));
     }
 
     public function sendEmailVerificationNotification(): void

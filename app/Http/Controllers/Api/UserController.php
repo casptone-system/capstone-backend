@@ -23,7 +23,8 @@ class UserController extends Controller
         if (! $user || ! (
             $user->hasRole('Super Administrator') ||
             $user->hasRole('Super Admin') ||
-            $user->hasRole('super administrator')
+            $user->hasRole('super administrator') ||
+            $user->hasRole('superadmin')
         )) {
             return null;
         }

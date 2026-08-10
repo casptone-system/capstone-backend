@@ -26,23 +26,9 @@ class ReviewController extends Controller
         'Submitted' => [
             'approve' => 'Area Approved',
             'revision_request' => 'Revision Requested',
+            'reject' => 'Rejected',
         ],
         'Area Approved' => [
-            'approve' => 'Dean Approved',
-            'revision_request' => 'Revision Requested',
-            'reject' => 'Rejected',
-        ],
-        'Dean Approved' => [
-            'approve' => 'QA Approved',
-            'revision_request' => 'Revision Requested',
-            'reject' => 'Rejected',
-        ],
-        'QA Approved' => [
-            'approve' => 'VPAA Approved',
-            'revision_request' => 'Revision Requested',
-            'reject' => 'Rejected',
-        ],
-        'VPAA Approved' => [
             'approve' => 'Ready',
             'revision_request' => 'Revision Requested',
             'reject' => 'Rejected',
@@ -94,6 +80,13 @@ class ReviewController extends Controller
             'cycle_id' => ['required', 'exists:accreditation_cycles,id'],
         ]);
 
+        $user = $request->user();
+
+        // Only faculty (or superadmin) can create reviews
+        if (! ($user->isFaculty() || $user->isSuperAdmin())) {
+            return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
+        }
+
         // Check if a review already exists for this area and cycle
         $existing = Review::where('area_id', $validated['area_id'])
             ->where('cycle_id', $validated['cycle_id'])
@@ -125,6 +118,8 @@ class ReviewController extends Controller
      */
     public function show(Review $review)
     {
+        $this->authorize('view', $review);
+
         $review->load('area.chair', 'cycle.program', 'submitter', 'comments.user');
 
         return response()->json([
@@ -139,6 +134,7 @@ class ReviewController extends Controller
      */
     public function submit(Request $request, Review $review)
     {
+        
         return $this->processTransition($request, $review, 'submit', 'Review submitted successfully.');
     }
 
@@ -147,6 +143,7 @@ class ReviewController extends Controller
      */
     public function approve(Request $request, Review $review)
     {
+        
         return $this->processTransition($request, $review, 'approve', 'Review approved successfully.');
     }
 
@@ -158,7 +155,7 @@ class ReviewController extends Controller
         $validated = $request->validate([
             'comment' => ['required', 'string'],
         ]);
-
+        
         return $this->processTransition($request, $review, 'revision_request', 'Revision requested.', $validated['comment']);
     }
 
@@ -170,7 +167,7 @@ class ReviewController extends Controller
         $validated = $request->validate([
             'comment' => ['required', 'string'],
         ]);
-
+        
         return $this->processTransition($request, $review, 'reject', 'Review rejected.', $validated['comment']);
     }
 
@@ -179,6 +176,8 @@ class ReviewController extends Controller
      */
     public function comments(Review $review)
     {
+        $this->authorize('view', $review);
+
         $comments = $review->comments()->with('user')->orderBy('created_at', 'desc')->get();
 
         return response()->json([
@@ -207,6 +206,22 @@ class ReviewController extends Controller
         $role = $this->getRoleForAction($currentStatus, $action);
 
         $newStatus = $this->resolveNextStatus($review, $action);
+
+        // Authorize the action based on policy AFTER validating transition
+        switch ($action) {
+            case 'submit':
+                $this->authorize('submit', $review);
+                break;
+            case 'approve':
+                $this->authorize('approve', $review);
+                break;
+            case 'revision_request':
+                $this->authorize('requestRevision', $review);
+                break;
+            case 'reject':
+                $this->authorize('reject', $review);
+                break;
+        }
 
         // Update timestamps
         $updates = ['current_status' => $newStatus];
@@ -263,10 +278,7 @@ class ReviewController extends Controller
         if ($action === 'approve') {
             return match ($currentStatus) {
                 'Submitted' => 'Area Approved',
-                'Area Approved' => 'Dean Approved',
-                'Dean Approved' => 'QA Approved',
-                'QA Approved' => 'VPAA Approved',
-                'VPAA Approved' => 'Ready',
+                'Area Approved' => 'Ready',
                 default => $currentStatus,
             };
         }
@@ -293,10 +305,7 @@ class ReviewController extends Controller
 
         return match ($currentStatus) {
             'Submitted' => 'Area Chair',
-            'Area Approved' => 'Dean',
-            'Dean Approved' => 'QA',
-            'QA Approved' => 'VPAA',
-            'VPAA Approved' => 'VPAA',
+            'Area Approved' => 'Program Chair',
             default => 'Member',
         };
     }

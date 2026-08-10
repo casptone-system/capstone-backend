@@ -14,6 +14,8 @@ class ProgramController extends Controller
      */
     public function index(Request $request)
     {
+        $this->authorize('viewAny', Program::class);
+
         $query = Program::with('college');
 
         if ($request->filled('college_id')) {
@@ -41,6 +43,8 @@ class ProgramController extends Controller
      */
     public function store(Request $request)
     {
+        $this->authorize('create', Program::class);
+
         $validated = $request->validate([
             'college_id' => ['required', 'exists:colleges,id'],
             'name' => ['required', 'string', 'max:255'],
@@ -64,6 +68,8 @@ class ProgramController extends Controller
      */
     public function show(Program $program)
     {
+        $this->authorize('view', $program);
+
         $program->load('college');
 
         return response()->json([
@@ -78,6 +84,8 @@ class ProgramController extends Controller
      */
     public function update(Request $request, Program $program)
     {
+        $this->authorize('update', $program);
+
         $validated = $request->validate([
             'college_id' => ['sometimes', 'required', 'exists:colleges,id'],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
@@ -101,6 +109,8 @@ class ProgramController extends Controller
      */
     public function destroy(Program $program)
     {
+        $this->authorize('delete', $program);
+
         $program->delete();
 
         return response()->json([

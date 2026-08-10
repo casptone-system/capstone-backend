@@ -18,6 +18,7 @@ use App\Notifications\TaskAssignedNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Laravel\Sanctum\Sanctum;
+use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class NotificationApiTest extends TestCase
@@ -323,6 +324,10 @@ class NotificationApiTest extends TestCase
     {
         Notification::fake();
 
+        // ensure uploader has Faculty role so document upload is authorized
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $this->user->assignRole('Faculty');
+
         $chair = User::factory()->create();
         $this->area->update(['chair_id' => $chair->id]);
 
@@ -352,6 +357,10 @@ class NotificationApiTest extends TestCase
     public function test_review_requested_notification_sent_on_submit(): void
     {
         Notification::fake();
+
+        // reviewer/submitter must be Faculty
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $this->user->assignRole('Faculty');
 
         $chair = User::factory()->create();
         $this->area->update(['chair_id' => $chair->id]);
@@ -383,7 +392,10 @@ class NotificationApiTest extends TestCase
             'submitted_at' => now(),
         ]);
 
-        // Act as a different user (the chair)
+        // Act as a different user (the chair) and give them the Area In-Charge role
+        Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        $this->user->assignRole('Area In-Charge');
+        $this->area->update(['chair_id' => $this->user->id]);
         Sanctum::actingAs($this->user);
 
         $response = $this->postJson('/api/reviews/' . $review->id . '/approve');
@@ -404,6 +416,12 @@ class NotificationApiTest extends TestCase
             'submitted_by' => $submitter->id,
             'current_status' => 'Area Approved',
         ]);
+
+        // Act as a Program Chair for the same program to reject
+        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
+        $this->user->assignRole('Program Chair');
+        $this->user->program_id = $this->program->id;
+        $this->user->save();
 
         $response = $this->postJson('/api/reviews/' . $review->id . '/reject', [
             'comment' => 'Does not meet standards.',

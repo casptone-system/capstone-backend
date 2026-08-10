@@ -35,6 +35,7 @@ class RolePermissionSeeder extends Seeder
         }
 
         $roles = [
+            // Preserve existing human-readable roles but ensure canonical slugs exist
             'Super Administrator' => [
                 'view dashboard',
                 'manage users',
@@ -91,9 +92,37 @@ class RolePermissionSeeder extends Seeder
             ],
         ];
 
+        // Define canonical slug overrides for roles we want normalized specially
+        $canonicalMap = [
+            'Super Administrator' => 'superadmin',
+            'VPAA' => 'vpaa',
+            'Program Chair' => 'program-chair',
+            'Area In-Charge' => 'area-in-charge',
+            'Accreditor' => 'accreditor',
+            'Faculty' => 'faculty',
+            'Dean' => 'dean',
+            'QA' => 'qa',
+        ];
+
         foreach ($roles as $name => $rolePermissions) {
             $role = Role::firstOrCreate(['name' => $name, 'guard_name' => 'web']);
             $role->syncPermissions($rolePermissions);
+
+            // Compute canonical slug (use overrides where appropriate)
+            if (isset($canonicalMap[$name])) {
+                $slug = $canonicalMap[$name];
+            } else {
+                $slug = strtolower(str_replace([' ', '_'], '-', $name));
+                $slug = preg_replace('/[^a-z0-9\-]/', '', $slug);
+            }
+
+            if ($slug !== $name) {
+                $canonical = Role::firstOrCreate(['name' => $slug, 'guard_name' => 'web']);
+                // Merge permissions: ensure canonical has at least the intended permissions
+                $canonicalPerms = $canonical->permissions->pluck('name')->toArray();
+                $toAssign = array_values(array_unique(array_merge($canonicalPerms, $rolePermissions)));
+                $canonical->syncPermissions($toAssign);
+            }
         }
     }
 }

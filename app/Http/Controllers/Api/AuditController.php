@@ -15,6 +15,11 @@ class AuditController extends Controller
 {
     public function index(Request $request)
     {
+        $user = $request->user();
+        if (! $user || (! $user->isSuperAdmin() && ! $user->hasPermissionTo('view audit logs'))) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to view audit logs.'], 403);
+        }
+
         $logs = AuditLog::with('details')
             ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->filled('user_email'), fn ($q) => $q->where('user_email', 'like', "%{$request->user_email}%"))
@@ -38,6 +43,11 @@ class AuditController extends Controller
 
     public function loginHistory(Request $request)
     {
+        $user = $request->user();
+        if (! $user || (! $user->isSuperAdmin() && ! $user->hasPermissionTo('view login history'))) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to view login history.'], 403);
+        }
+
         $histories = LoginHistory::when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->filled('email'), fn ($q) => $q->where('email', 'like', "%{$request->email}%"))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->status))
@@ -58,6 +68,11 @@ class AuditController extends Controller
 
     public function summaries(Request $request)
     {
+        $user = $request->user();
+        if (! $user || (! $user->isSuperAdmin() && ! $user->hasPermissionTo('view audit logs'))) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to view audit summaries.'], 403);
+        }
+
         $summaries = AuditLogSummary::when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->filled('event'), fn ($q) => $q->where('event', $request->event))
             ->orderBy('total_count', 'desc')
@@ -75,6 +90,11 @@ class AuditController extends Controller
 
     public function sessions(Request $request)
     {
+        $user = $request->user();
+        if (! $user || (! $user->isSuperAdmin() && ! $user->hasPermissionTo('view login history'))) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to view sessions.'], 403);
+        }
+
         $sessions = \Illuminate\Support\Facades\DB::table('sessions')
             ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
             ->orderByDesc('last_activity')

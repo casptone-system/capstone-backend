@@ -8,6 +8,7 @@ use App\Models\Document;
 use App\Models\Program;
 use App\Models\Task;
 use App\Models\User;
+use Spatie\Permission\Models\Role;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -30,6 +31,9 @@ class DocumentApiTest extends TestCase
         parent::setUp();
 
         $this->user = User::factory()->create();
+        // Ensure a faculty role exists and assign to the test user so policies allow document actions
+        Role::firstOrCreate(['name' => 'faculty', 'guard_name' => 'web']);
+        $this->user->assignRole('faculty');
         Sanctum::actingAs($this->user);
 
         $this->program = Program::factory()->create();

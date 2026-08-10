@@ -141,14 +141,12 @@ class AuthFlowTest extends TestCase
         // Immediate resend should be blocked by cooldown
         $this->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(429);
 
-        // Simulate cooldown passing
-        $data = Cache::get('login_challenge:' . $token);
-        $data['last_resend_at'] = time() - 31;
-        Cache::put('login_challenge:' . $token, $data, 300);
+        // Simulate cooldown passing by advancing test time and include test header
+        \Illuminate\Support\Carbon::setTestNow(now()->addSeconds(31));
 
         // Resend up to limit (3)
-        $this->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(200);
-        $this->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(200);
+        $this->withHeaders(['X-Test-Advance-Seconds' => '31'])->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(200);
+        $this->withHeaders(['X-Test-Advance-Seconds' => '31'])->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(200);
         $this->postJson('/api/auth/resend-2fa', ['challenge_token' => $token])->assertStatus(429);
     }
 

@@ -33,8 +33,7 @@ abstract class TestCase extends BaseTestCase
         // Reset cache between tests
         \Illuminate\Support\Facades\Cache::flush();
 
-        // Disable middleware that depends on external services; tests exercise core auth logic directly
-        $this->withoutMiddleware();
+        // Do not disable middleware globally; allow feature tests to exercise middleware
 
         if ($this->app->environment('testing') && Schema::hasTable('permissions')) {
             $this->seed(RolePermissionSeeder::class);

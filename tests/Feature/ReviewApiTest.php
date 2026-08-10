@@ -9,6 +9,7 @@ use App\Models\Review;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class ReviewApiTest extends TestCase
@@ -26,6 +27,9 @@ class ReviewApiTest extends TestCase
         parent::setUp();
 
         $this->user = User::factory()->create();
+        // ensure a faculty role exists and assign for review creation
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $this->user->assignRole('Faculty');
         Sanctum::actingAs($this->user);
 
         $this->program = Program::factory()->create();
@@ -176,12 +180,19 @@ class ReviewApiTest extends TestCase
     public function test_approve_transitions_submitted_to_area_approved(): void
     {
         $this->review->update(['current_status' => 'Submitted', 'submitted_at' => now()]);
+        // create and act as area chair assigned to the area
+        $areaChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        $areaChair->assignRole('Area In-Charge');
+        $this->area->chair_id = $areaChair->id;
+        $this->area->save();
 
+        Sanctum::actingAs($areaChair);
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
 
         $response->assertStatus(200)
             ->assertJsonPath('data.currentStatus', 'Area Approved')
-            ->assertJsonPath('data.expectedReviewerRole', 'Dean');
+            ->assertJsonPath('data.expectedReviewerRole', 'Program Chair');
 
         $this->assertDatabaseHas('review_comments', [
             'review_id' => $this->review->id,
@@ -195,28 +206,44 @@ class ReviewApiTest extends TestCase
         // Draft → Submitted
         $this->review->update(['current_status' => 'Submitted', 'submitted_at' => now()]);
 
-        // Submitted → Area Approved
+        // Submitted → Area Approved (area chair)
+        $areaChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        $areaChair->assignRole('Area In-Charge');
+        $this->area->chair_id = $areaChair->id;
+        $this->area->save();
+        Sanctum::actingAs($areaChair);
         $this->postJson('/api/reviews/' . $this->review->id . '/approve');
         $this->assertEquals('Area Approved', $this->review->fresh()->current_status);
 
-        // Area Approved → Dean Approved
-        $this->postJson('/api/reviews/' . $this->review->id . '/approve');
-        $this->assertEquals('Dean Approved', $this->review->fresh()->current_status);
-
-        // Dean Approved → QA Approved
-        $this->postJson('/api/reviews/' . $this->review->id . '/approve');
-        $this->assertEquals('QA Approved', $this->review->fresh()->current_status);
-
-        // QA Approved → VPAA Approved
-        $this->postJson('/api/reviews/' . $this->review->id . '/approve');
-        $this->assertEquals('VPAA Approved', $this->review->fresh()->current_status);
-
-        // VPAA Approved → Ready
+        // Area Approved → Ready (program chair)
+        $programChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
+        $programChair->assignRole('Program Chair');
+        $programChair->program_id = $this->program->id;
+        $programChair->save();
+        Sanctum::actingAs($programChair);
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
-        $response->assertJsonPath('data.currentStatus', 'Ready')
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.currentStatus', 'Ready')
             ->assertJsonPath('data.isTerminal', true);
 
         $this->assertNotNull($this->review->fresh()->completed_at);
+    }
+
+    public function test_dean_cannot_approve_review(): void
+    {
+        $this->review->update(['current_status' => 'Submitted', 'submitted_at' => now()]);
+
+        $dean = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+        Sanctum::actingAs($dean);
+
+        $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
+
+        $response->assertStatus(403);
     }
 
     public function test_request_revision_requires_comment(): void
@@ -232,6 +259,14 @@ class ReviewApiTest extends TestCase
     public function test_request_revision_transitions_back(): void
     {
         $this->review->update(['current_status' => 'Submitted', 'submitted_at' => now()]);
+
+        // act as area chair to request revision
+        $areaChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        $areaChair->assignRole('Area In-Charge');
+        $this->area->chair_id = $areaChair->id;
+        $this->area->save();
+        Sanctum::actingAs($areaChair);
 
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/request-revision', [
             'comment' => 'Please update the documentation.',
@@ -261,6 +296,14 @@ class ReviewApiTest extends TestCase
     public function test_reject_transitions_to_rejected(): void
     {
         $this->review->update(['current_status' => 'Area Approved']);
+
+        // act as Program Chair to reject
+        $programChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
+        $programChair->assignRole('Program Chair');
+        $programChair->program_id = $this->program->id;
+        $programChair->save();
+        Sanctum::actingAs($programChair);
 
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/reject', [
             'comment' => 'This does not meet the standards.',
@@ -292,7 +335,14 @@ class ReviewApiTest extends TestCase
 
     public function test_invalid_transition_returns_error(): void
     {
-        // Trying to approve a Draft review (must submit first)
+        // Trying to approve a Draft review (must submit first) — act as an authorized approver (area chair)
+        $areaChair = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        $areaChair->assignRole('Area In-Charge');
+        $this->area->chair_id = $areaChair->id;
+        $this->area->save();
+        Sanctum::actingAs($areaChair);
+
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
 
         $response->assertStatus(422)
@@ -329,9 +379,8 @@ class ReviewApiTest extends TestCase
 
         public function test_unauthenticated_access_is_rejected(): void
         {
-            // Remove the authenticated user created in setUp().
-            Sanctum::actingAs(null);
-
+            // Refresh the application to clear test-auth state and make a fresh unauthenticated request
+            $this->refreshApplication();
             $response = $this->getJson('/api/reviews');
 
             $response->assertStatus(401);

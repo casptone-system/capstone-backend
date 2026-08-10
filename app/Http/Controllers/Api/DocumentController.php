@@ -21,7 +21,37 @@ class DocumentController extends Controller
      */
     public function index(Request $request)
     {
+        $user = $request->user();
+
         $query = Document::with('program', 'area', 'task', 'uploader', 'versions');
+
+        // Scope documents returned based on policy-like rules to avoid IDOR
+        if (! $user->isSuperAdmin() && ! $user->isQA() && ! $user->isVPAA()) {
+            if ($user->isFaculty()) {
+                $query->where('uploaded_by', $user->id);
+            } elseif ($user->isAreaIncharge()) {
+                $areaIds = $user->assignedAreaIds()->toArray();
+                $query->whereIn('area_id', $areaIds);
+            } elseif ($user->isProgramChair()) {
+                $programId = $user->getEffectiveProgramId();
+                if ($programId) {
+                    $query->where('program_id', $programId);
+                } else {
+                    // no effective program, return empty
+                    $query->whereRaw('1 = 0');
+                }
+            } elseif ($user->isDean()) {
+                $collegeId = $user->getEffectiveCollegeId();
+                if ($collegeId) {
+                    $query->whereHas('program', fn ($q) => $q->where('college_id', $collegeId));
+                } else {
+                    $query->whereRaw('1 = 0');
+                }
+            } else {
+                // Other roles without broad access: restrict to uploaded_by
+                $query->where('uploaded_by', $user->id);
+            }
+        }
 
         if ($request->filled('program_id')) {
             $query->where('program_id', $request->program_id);
@@ -64,6 +94,8 @@ class DocumentController extends Controller
      */
     public function store(Request $request)
     {
+        $this->authorize('create', Document::class);
+
         $validated = $request->validate([
             'program_id' => ['required', 'exists:programs,id'],
             'area_id' => ['nullable', 'exists:accreditation_areas,id'],
@@ -79,12 +111,13 @@ class DocumentController extends Controller
         $originalName = $file->getClientOriginalName();
         $fileSize = $file->getSize();
 
-        // Create the document record
-        $validated['uploaded_by'] = $request->user()->id;
-        $validated['current_version'] = 1;
-        $validated['status'] = 'Active';
+        // Prepare document data (do not store the uploaded file path on the documents table)
+        $documentData = collect($validated)->except(['file'])->toArray();
+        $documentData['uploaded_by'] = $request->user()->id;
+        $documentData['current_version'] = 1;
+        $documentData['status'] = 'Active';
 
-        $document = Document::create($validated);
+        $document = Document::create($documentData);
 
         // Store the file
         $versionPath = "documents/{$document->id}/v1";
@@ -115,6 +148,8 @@ class DocumentController extends Controller
      */
     public function show(Document $document)
     {
+        $this->authorize('view', $document);
+
         $document->load('program', 'area', 'task', 'uploader', 'versions.uploader');
 
         return response()->json([
@@ -129,6 +164,8 @@ class DocumentController extends Controller
      */
     public function update(Request $request, Document $document)
     {
+        $this->authorize('update', $document);
+
         $validated = $request->validate([
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -150,6 +187,8 @@ class DocumentController extends Controller
      */
     public function destroy(Document $document)
     {
+        $this->authorize('delete', $document);
+
         // Delete all stored files
         $documentPath = "documents/{$document->id}";
         Storage::disk('local')->deleteDirectory($documentPath);
@@ -167,6 +206,8 @@ class DocumentController extends Controller
      */
     public function replace(Request $request, Document $document)
     {
+        $this->authorize('replace', $document);
+
         $validated = $request->validate([
             'file' => ['required', 'file', 'max:51200'], // 50MB max
         ]);
@@ -207,6 +248,8 @@ class DocumentController extends Controller
      */
     public function versions(Document $document)
     {
+        $this->authorize('view', $document);
+
         $versions = $document->versions()->with('uploader')->orderBy('version', 'desc')->get();
 
         return response()->json([
@@ -222,6 +265,8 @@ class DocumentController extends Controller
      */
     public function download(Request $request, Document $document)
     {
+        $this->authorize('download', $document);
+
         $versionNumber = $request->get('version', $document->current_version);
 
         $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
