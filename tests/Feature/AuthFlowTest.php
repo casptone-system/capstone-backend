@@ -8,6 +8,7 @@ use App\Notifications\LoginVerificationCodeNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -74,6 +75,21 @@ class AuthFlowTest extends TestCase
         $verifyResp = $this->postJson('/api/auth/verify-2fa', ['challenge_token' => $challenge['challenge_token'], 'code' => $knownCode]);
         $verifyResp->assertStatus(200)->assertJsonPath('success', true);
         $this->assertArrayHasKey('token', $verifyResp->json('data'));
+    }
+
+    public function test_signed_email_verification_redirects_to_frontend_verification_page()
+    {
+        $user = User::factory()->unverified()->create(['password' => bcrypt('secret123')]);
+        $hash = sha1($user->getEmailForVerification());
+        $signedUrl = URL::signedRoute('verification.verify', [
+            'id' => $user->id,
+            'hash' => $hash,
+        ]);
+
+        $response = $this->get($signedUrl);
+
+        $response->assertStatus(302);
+        $response->assertRedirectContains('http://127.0.0.1:8084/email-verified?status=success');
     }
 
     public function test_invalid_2fa_code_is_rejected()
