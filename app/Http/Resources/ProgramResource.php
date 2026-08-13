@@ -18,11 +18,13 @@ class ProgramResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'code' => $this->code,
-            'chair' => $this->chair,
+            'chair' => $this->chair_name,
+            'chairId' => $this->chair_id,
             'accreditationStatus' => $this->accreditation_status,
             'complianceScore' => $this->compliance_score,
             'collegeId' => $this->college_id,
             'college' => $this->whenLoaded('college', fn () => new CollegeResource($this->college)),
+            'chairUser' => $this->whenLoaded('chairUser', fn () => new UserResource($this->chairUser)),
         ];
     }
 }

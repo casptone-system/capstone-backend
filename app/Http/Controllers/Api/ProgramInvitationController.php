@@ -46,15 +46,34 @@ class ProgramInvitationController extends Controller
 
         $token = bin2hex(random_bytes(24));
 
-        $inv = Invitation::create([
-            'program_id' => $program->id,
-            'email' => $validated['email'] ?? null,
-            'role' => $validated['role'] ?? null,
-            'token' => $token,
-            'invited_by' => $user->id,
-            'expires_at' => isset($validated['expires_in_hours']) ? now()->addHours($validated['expires_in_hours']) : now()->addDays(3),
-            'status' => 'pending',
-        ]);
+        try {
+            $inv = Invitation::create([
+                'program_id' => $program->id,
+                'email' => $validated['email'] ?? null,
+                'role' => $validated['role'] ?? null,
+                'token' => $token,
+                'invited_by' => $user->id,
+                'expires_at' => isset($validated['expires_in_hours']) ? now()->addHours($validated['expires_in_hours']) : now()->addDays(3),
+                'status' => 'pending',
+            ]);
+        } catch (\Throwable $e) {
+            // Record an explicit audit entry for failed invitation creation so admins can retry
+            try {
+                \App\Models\AuditLog::create([
+                    'user_id' => $user->id,
+                    'user_email' => $user->email,
+                    'event' => 'INVITE_CREATE_FAILED',
+                    'method' => 'POST',
+                    'path' => $request->path(),
+                    'status' => 'error',
+                    'ip_address' => $request->ip(),
+                ]);
+            } catch (\Throwable $_) {
+                // silence audit failures
+            }
+
+            return response()->json(['success' => false, 'message' => 'Failed to create invitation.'], 500);
+        }
 
         return response()->json(['success' => true, 'data' => $inv], 201);
     }
@@ -81,7 +100,24 @@ class ProgramInvitationController extends Controller
 
         $inv->expires_at = now()->addDays(3);
         $inv->status = 'pending';
-        $inv->save();
+        try {
+            $inv->save();
+        } catch (\Throwable $e) {
+            try {
+                \App\Models\AuditLog::create([
+                    'user_id' => $user->id,
+                    'user_email' => $user->email,
+                    'event' => 'INVITE_RESEND_FAILED',
+                    'method' => 'POST',
+                    'path' => $request->path(),
+                    'status' => 'error',
+                    'ip_address' => $request->ip(),
+                ]);
+            } catch (\Throwable $_) {
+            }
+
+            return response()->json(['success' => false, 'message' => 'Failed to resend invitation.'], 500);
+        }
 
         return response()->json(['success' => true, 'data' => $inv], 200);
     }
@@ -101,7 +137,24 @@ class ProgramInvitationController extends Controller
         $this->authorize('revoke', $inv);
 
         $inv->status = 'revoked';
-        $inv->save();
+        try {
+            $inv->save();
+        } catch (\Throwable $e) {
+            try {
+                \App\Models\AuditLog::create([
+                    'user_id' => $user->id,
+                    'user_email' => $user->email,
+                    'event' => 'INVITE_REVOKE_FAILED',
+                    'method' => 'POST',
+                    'path' => $request->path(),
+                    'status' => 'error',
+                    'ip_address' => $request->ip(),
+                ]);
+            } catch (\Throwable $_) {
+            }
+
+            return response()->json(['success' => false, 'message' => 'Failed to revoke invitation.'], 500);
+        }
 
         return response()->json(['success' => true, 'data' => $inv], 200);
     }

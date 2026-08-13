@@ -89,7 +89,7 @@ class AuthFlowTest extends TestCase
         $response = $this->get($signedUrl);
 
         $response->assertStatus(302);
-        $response->assertRedirectContains('http://127.0.0.1:8084/email-verified?status=success');
+        $response->assertRedirectContains('http://localhost:8080/email-verified?status=success');
     }
 
     public function test_invalid_2fa_code_is_rejected()

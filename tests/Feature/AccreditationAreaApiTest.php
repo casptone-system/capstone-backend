@@ -31,6 +31,8 @@ class AccreditationAreaApiTest extends TestCase
         $this->area = AccreditationArea::factory()->create([
             'cycle_id' => $this->cycle->id,
             'name' => 'Area I: Vision, Mission, Goals',
+            // ensure deterministic status for tests that filter by status
+            'status' => 'Not Started',
         ]);
     }
 

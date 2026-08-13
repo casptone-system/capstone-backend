@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\AuditLog;
+use App\Models\College;
 use App\Models\Program;
 use App\Models\Team;
 use App\Models\User;
@@ -30,6 +31,63 @@ class UserController extends Controller
         }
 
         return $user;
+    }
+
+    private function resolveCollegeIdFromValidatedUserData(array $validated): ?int
+    {
+        if (! empty($validated['college_id'])) {
+            return $validated['college_id'];
+        }
+
+        if (! empty($validated['program_id'])) {
+            return Program::find($validated['program_id'])?->college_id;
+        }
+
+        if (! empty($validated['team_id'])) {
+            return Team::find($validated['team_id'])?->program?->college_id;
+        }
+
+        return null;
+    }
+
+    private function ensureDeanHasValidCollege(array $validated): ?\Illuminate\Http\JsonResponse
+    {
+        if (strtolower($validated['role']) !== 'dean') {
+            return null;
+        }
+
+        $collegeId = $this->resolveCollegeIdFromValidatedUserData($validated);
+        if (! $collegeId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A dean must belong to a college via a college, program, or team association.',
+                'errors' => ['college_id' => ['A dean must belong to a college.']],
+            ], 422);
+        }
+
+        if (! empty($validated['college_id']) && ! empty($validated['program_id'])) {
+            $programCollegeId = Program::find($validated['program_id'])?->college_id;
+            if ($programCollegeId && $programCollegeId !== $validated['college_id']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The selected program belongs to a different college than the dean.',
+                    'errors' => ['program_id' => ['The selected program belongs to a different college.']],
+                ], 422);
+            }
+        }
+
+        if (! empty($validated['college_id']) && ! empty($validated['team_id'])) {
+            $teamCollegeId = Team::find($validated['team_id'])?->program?->college_id;
+            if ($teamCollegeId && $teamCollegeId !== $validated['college_id']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The selected team belongs to a different college than the dean.',
+                    'errors' => ['team_id' => ['The selected team belongs to a different college.']],
+                ], 422);
+            }
+        }
+
+        return null;
     }
 
     public function dashboard(Request $request)
@@ -96,10 +154,15 @@ class UserController extends Controller
             'phone' => ['nullable', 'string', 'max:255'],
             'birthdate' => ['nullable', 'date'],
             'role' => ['required', 'string'],
-            'program_id' => ['nullable', 'integer'],
-            'team_id' => ['nullable', 'integer'],
+            'college_id' => ['nullable', 'integer', 'exists:colleges,id'],
+            'program_id' => ['nullable', 'integer', 'exists:programs,id'],
+            'team_id' => ['nullable', 'integer', 'exists:teams,id'],
             'status' => ['nullable', 'string'],
         ]);
+
+        if ($response = $this->ensureDeanHasValidCollege($validated)) {
+            return $response;
+        }
 
         $user = User::create([
             'first_name' => $validated['first_name'],
@@ -110,6 +173,7 @@ class UserController extends Controller
             'password' => Hash::make($validated['password']),
             'phone_number' => $validated['phone'] ?? null,
             'birth_date' => $validated['birthdate'] ?? null,
+            'college_id' => $validated['college_id'] ?? null,
             'program_id' => $validated['program_id'] ?? null,
             'team_id' => $validated['team_id'] ?? null,
         ]);
@@ -143,6 +207,27 @@ class UserController extends Controller
         return response()->json(['success' => true, 'data' => new UserResource($user)]);
     }
 
+    public function programChairs(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || (! $user->isSuperAdmin() && ! $user->isDean())) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to view program chairs.'], 403);
+        }
+
+        $chairs = User::role('Program Chair')
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get(['id', 'first_name', 'middle_name', 'last_name', 'email', 'program_id'])
+            ->map(fn ($chair) => [
+                'id' => $chair->id,
+                'name' => trim(sprintf('%s %s %s', $chair->first_name, $chair->middle_name ?? '', $chair->last_name)),
+                'email' => $chair->email,
+                'programId' => $chair->program_id,
+            ]);
+
+        return response()->json(['success' => true, 'data' => $chairs]);
+    }
+
     public function update(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);
@@ -160,6 +245,7 @@ class UserController extends Controller
             'phone' => ['nullable', 'string', 'max:255'],
             'birthdate' => ['nullable', 'date'],
             'role' => ['nullable', 'string'],
+            'college_id' => ['nullable', 'integer', 'exists:colleges,id'],
             'program_id' => ['nullable', 'integer'],
             'team_id' => ['nullable', 'integer'],
             'status' => ['nullable', 'string'],
@@ -172,14 +258,39 @@ class UserController extends Controller
         if (isset($validated['email'])) $user->email = $validated['email'];
         if (isset($validated['phone'])) $user->phone_number = $validated['phone'];
         if (isset($validated['birthdate'])) $user->birth_date = $validated['birthdate'];
+        if (array_key_exists('college_id', $validated)) $user->college_id = $validated['college_id'];
         if (array_key_exists('program_id', $validated)) $user->program_id = $validated['program_id'];
         if (array_key_exists('team_id', $validated)) $user->team_id = $validated['team_id'];
+        $wasDean = $user->isDean();
+        $newRoleName = null;
         if (isset($validated['role'])) {
             $roleName = str_replace('_', ' ', $validated['role']);
             $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
             $user->syncRoles([$role->name]);
+            $newRoleName = $role->name;
         }
         $user->save();
+
+        $updatedCollege = null;
+        if (array_key_exists('college_id', $validated) && ! is_null($validated['college_id'])) {
+            $updatedCollege = College::find($validated['college_id']);
+        }
+
+        $isNowDean = $user->fresh()->isDean();
+        if ($isNowDean && ! $wasDean) {
+            try {
+                $targetCollege = $updatedCollege ?? $user->fresh()->college;
+                if ($targetCollege) {
+                    $user->notify(new \App\Notifications\DeanAssignedNotification($targetCollege, $actor, $user));
+
+                    if ($actor && $actor->id !== $user->id) {
+                        $actor->notify(new \App\Notifications\DeanAssignedNotification($targetCollege, $actor, $user));
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Ignore notification failures so that the user update still succeeds.
+            }
+        }
 
         AuditLog::create([
             'user_id' => $actor->id,

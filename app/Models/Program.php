@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -21,12 +22,13 @@ class Program extends Model
         'name',
         'code',
         'chair',
+        'chair_id',
         'accreditation_status',
         'compliance_score',
     ];
 
     /**
-     * Get the attributes that should be cast.
+     * The attributes that should be cast.
      *
      * @return array<string, string>
      */
@@ -38,11 +40,44 @@ class Program extends Model
     }
 
     /**
+     * The accessors to append to the model's array form.
+     *
+     * @var list<string>
+     */
+    protected $appends = [
+        'chair_name',
+    ];
+
+    /**
      * Get the college that owns the program.
      */
     public function college(): BelongsTo
     {
         return $this->belongsTo(College::class);
+    }
+
+    /**
+     * Get the current program chair user.
+     */
+    public function chairUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'chair_id');
+    }
+
+    /**
+     * Return the effective chair name from the related user or legacy text field.
+     */
+    public function getChairNameAttribute(): ?string
+    {
+        return $this->chairUser?->name ?? $this->attributes['chair'] ?? null;
+    }
+
+    /**
+     * Get the active program membership records.
+     */
+    public function activeMembers(): HasMany
+    {
+        return $this->hasMany(ProgramMember::class)->whereNull('ended_at');
     }
 
     /**

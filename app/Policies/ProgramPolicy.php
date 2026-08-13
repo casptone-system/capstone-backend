@@ -27,7 +27,9 @@ class ProgramPolicy
         }
 
         if ($user->isProgramChair()) {
-            return $this->hasProgramMembership($user, $program) || $program->id === $user->getEffectiveProgramId();
+            return $program->chair_id === $user->id
+                || $this->hasProgramMembership($user, $program)
+                || $program->id === $user->getEffectiveProgramId();
         }
 
         if ($user->isAreaIncharge()) {

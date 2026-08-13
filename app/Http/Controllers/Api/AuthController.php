@@ -421,7 +421,7 @@ class AuthController extends Controller
 
     public function verifyEmail(Request $request, string $id, string $hash)
     {
-        $frontendUrl = env('FRONTEND_URL', config('app.url'));
+        $frontendUrl = env('FRONTEND_URL', config('app.frontend_url', config('app.url')));
         $user = User::find($id);
         $baseRedirect = rtrim($frontendUrl, '/') . '/email-verified?status=invalid';
 
@@ -485,6 +485,19 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
+        $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
+        $isSuperAdmin = $creator && (
+            $creator->hasRole('Super Administrator') ||
+            $creator->hasRole('Super Admin') ||
+            $creator->hasRole('super administrator') ||
+            $creator->hasRole('superadmin')
+        );
+
+        $profilePhotoRules = ['nullable', 'image', 'max:10240'];
+        if ($isSuperAdmin) {
+            $profilePhotoRules = ['required', 'image', 'max:10240'];
+        }
+
         try {
             $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
@@ -497,7 +510,7 @@ class AuthController extends Controller
             'phone' => ['nullable', 'string', 'max:255'],
             'birthdate' => ['nullable', 'date'],
             'role' => ['sometimes', 'string'],
-            'profile_photo' => ['required', 'image', 'max:10240'],
+            'profile_photo' => $profilePhotoRules,
         ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
             $errors = $e->errors();
@@ -558,7 +571,7 @@ class AuthController extends Controller
             $creator->hasRole('superadmin')
         );
 
-        // If the request is made by an authenticated non-super-admin, forbid creating users
+        // Public self-registration is allowed, but authenticated non-super-admins may not create users.
         if ($creator && ! $isSuperAdmin) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }

@@ -2,8 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Models\College;
+use App\Models\Program;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class AuthApiTest extends TestCase
@@ -38,6 +43,8 @@ class AuthApiTest extends TestCase
 
     public function test_super_admin_can_create_user(): void
     {
+        Storage::fake('public');
+
         $admin = User::factory()->create([
             'name' => 'Super Admin',
             'email' => 'admin@example.com',
@@ -53,6 +60,7 @@ class AuthApiTest extends TestCase
             'password' => 'password123',
             'password_confirmation' => 'password123',
             'role' => 'faculty',
+            'profile_photo' => UploadedFile::fake()->create('avatar.png', 120, 'image/png'),
         ]);
 
         $response->assertStatus(201)
@@ -66,6 +74,68 @@ class AuthApiTest extends TestCase
             'first_name' => 'New',
             'last_name' => 'User',
         ]);
+    }
+
+    public function test_super_admin_can_create_dean_with_program_id(): void
+    {
+        $admin = User::factory()->create([
+            'name' => 'Super Admin',
+            'email' => 'admin@example.com',
+            'password' => 'secret123',
+        ]);
+        $admin->assignRole('Super Administrator');
+
+        $college = College::factory()->create();
+        $program = Program::factory()->create(['college_id' => $college->id]);
+
+        $response = $this->actingAs($admin, 'sanctum')->postJson('/api/admin/users', [
+            'first_name' => 'Dean',
+            'last_name' => 'User',
+            'email' => 'dean@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+            'role' => 'dean',
+            'program_id' => $program->id,
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.role', 'dean')
+            ->assertJsonPath('data.programId', $program->id);
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'dean@example.com',
+            'program_id' => $program->id,
+        ]);
+
+        $this->assertDatabaseHas('model_has_roles', [
+            'role_id' => Role::where('name', 'dean')->first()->id,
+            'model_type' => User::class,
+            'model_id' => User::where('email', 'dean@example.com')->first()->id,
+        ]);
+    }
+
+    public function test_super_admin_cannot_create_dean_without_college_program_or_team(): void
+    {
+        $admin = User::factory()->create([
+            'name' => 'Super Admin',
+            'email' => 'admin@example.com',
+            'password' => 'secret123',
+        ]);
+        $admin->assignRole('Super Administrator');
+
+        $response = $this->actingAs($admin, 'sanctum')->postJson('/api/admin/users', [
+            'first_name' => 'Dean',
+            'last_name' => 'User',
+            'email' => 'dean2@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+            'role' => 'dean',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('errors.college_id.0', 'A dean must belong to a college.');
     }
 
     public function test_register_requires_super_admin(): void

@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\DeanController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
+use App\Http\Controllers\Api\RoleStorageController;
 use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserController;
@@ -65,6 +66,13 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);
     Route::apiResource('documents', DocumentController::class);
 
+    // Role-specific storage vaults
+    Route::get('role-storage', [RoleStorageController::class, 'index']);
+    Route::post('role-storage/folders', [RoleStorageController::class, 'store']);
+    Route::post('role-storage/folders/{folder}/upload', [RoleStorageController::class, 'upload']);
+    Route::get('role-storage/files/{file}/download', [RoleStorageController::class, 'download']);
+    Route::delete('role-storage/files/{file}', [RoleStorageController::class, 'destroyFile']);
+
     // Reviews (CRUD + workflow: submit, approve, request-revision, reject, comments)
     Route::post('reviews/{review}/submit', [ReviewController::class, 'submit']);
     Route::post('reviews/{review}/approve', [ReviewController::class, 'approve']);
@@ -88,6 +96,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('dean/programs', [DeanController::class, 'programs']);
 
     Route::get('users', [UserController::class, 'index']);
+    Route::get('program-chairs', [UserController::class, 'programChairs']);
 
     // Super Administrator user management and administration
     Route::get('admin/dashboard', [UserController::class, 'dashboard']);

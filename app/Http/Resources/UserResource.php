@@ -34,8 +34,11 @@ class UserResource extends JsonResource
             'role_slug' => $roleSlug,
             'roles' => $roles->values(),
             'permissions' => $this->getPermissionNames(),
+            'college_id' => $this->college_id ?? null,
             'teamId' => $this->team_id ?? null,
+            'team_id' => $this->team_id ?? null,
             'programId' => $this->program_id ?? null,
+            'program_id' => $this->program_id ?? null,
         ];
     }
 }

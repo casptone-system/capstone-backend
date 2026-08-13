@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
+use App\Models\College;
 use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
@@ -148,6 +149,75 @@ class NotificationApiTest extends TestCase
             ->assertJsonPath('data.id', $notificationId)
             ->assertJsonPath('data.type', 'task_assigned')
             ->assertJsonPath('data.isRead', false);
+    }
+
+    public function test_super_admin_assignment_of_dean_sends_notification_to_target_user(): void
+    {
+        Notification::fake();
+
+        $admin = User::factory()->create();
+        $admin->assignRole('Super Administrator');
+
+        $college = College::factory()->create();
+        $targetUser = User::factory()->create([
+            'college_id' => null,
+            'email' => 'dean-target@example.com',
+        ]);
+
+        $response = $this->actingAs($admin, 'sanctum')->putJson('/api/admin/users/' . $targetUser->id, [
+            'role' => 'Dean',
+            'college_id' => $college->id,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $this->assertDatabaseHas('users', [
+            'id' => $targetUser->id,
+            'college_id' => $college->id,
+        ]);
+
+        $targetUser->refresh();
+        $this->assertTrue($targetUser->isDean());
+
+        Notification::assertSentTo(
+            $targetUser,
+            \App\Notifications\DeanAssignedNotification::class,
+            function ($notification, $channels) use ($college) {
+                return $notification->college->id === $college->id;
+            }
+        );
+
+        Notification::assertSentTo(
+            $admin,
+            \App\Notifications\DeanAssignedNotification::class,
+            function ($notification, $channels) use ($college, $targetUser) {
+                return $notification->college->id === $college->id
+                    && $notification->targetUser?->id === $targetUser->id;
+            }
+        );
+    }
+
+    public function test_users_index_includes_college_assignment_in_api_payload(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole('Super Administrator');
+
+        $college = College::factory()->create();
+        $user = User::factory()->create([
+            'college_id' => $college->id,
+            'email' => 'college-user@example.com',
+        ]);
+        $user->assignRole('Dean');
+
+        $response = $this->actingAs($admin, 'sanctum')->getJson('/api/admin/users');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonFragment([
+                'college_id' => $college->id,
+                'email' => 'college-user@example.com',
+            ]);
     }
 
     public function test_show_returns_404_for_nonexistent_notification(): void

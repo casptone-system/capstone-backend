@@ -33,11 +33,13 @@ class TaskApiTest extends TestCase
         $this->area = AccreditationArea::factory()->create([
             'cycle_id' => $this->cycle->id,
             'name' => 'Area I: Vision, Mission, Goals',
+            'status' => 'Not Started',
         ]);
         $this->task = Task::factory()->create([
             'area_id' => $this->area->id,
             'title' => 'Prepare documentation for Area I',
             'priority' => 'Medium',
+            'status' => 'Not Started',
             'created_by' => $this->user->id,
         ]);
     }

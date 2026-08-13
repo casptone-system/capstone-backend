@@ -42,7 +42,7 @@ class DeanController extends Controller
         }
 
         $programs = Program::where('college_id', $college->id)
-            ->with(['college'])
+            ->with(['college', 'chairUser'])
             ->get();
 
         $programIds = $programs->pluck('id');
@@ -53,9 +53,10 @@ class DeanController extends Controller
             ->limit(10)
             ->get();
 
-        $programChairs = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Program Chair'))
-            ->get();
+        $activeProgramChairCount = Program::where('college_id', $college->id)
+            ->whereNotNull('chair_id')
+            ->distinct('chair_id')
+            ->count('chair_id');
 
         $facultyCount = User::whereIn('program_id', $programIds)
             ->whereHas('roles', fn ($query) => $query->where('name', 'Faculty'))
@@ -71,6 +72,15 @@ class DeanController extends Controller
         $atRiskPrograms = $programs->filter(fn ($program) => (int) $program->compliance_score < 70)->count();
 
         return response()->json(['success' => true, 'data' => [
+            'dean' => [
+                'id' => $user->id,
+                'name' => trim(sprintf('%s %s %s', $user->first_name, $user->middle_name ?? '', $user->last_name)),
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'position' => 'Dean',
+                'role' => 'Dean',
+                'department' => $college->name,
+            ],
             'college' => [
                 'id' => $college->id,
                 'name' => $college->name,
@@ -81,14 +91,14 @@ class DeanController extends Controller
                 ['label' => 'Pending Reviews', 'value' => (string) $pendingDocuments, 'type' => 'pending'],
                 ['label' => 'At-Risk Programs', 'value' => (string) $atRiskPrograms, 'type' => 'risk'],
                 ['label' => 'Faculty Participation', 'value' => $facultyCount ? round(($activeFacultyCount / $facultyCount) * 100, 1) . '%' : '0%', 'type' => 'faculty'],
-                ['label' => 'Active Program Chairs', 'value' => (string) $programChairs->count(), 'type' => 'chairs'],
+                ['label' => 'Active Program Chairs', 'value' => (string) $activeProgramChairCount, 'type' => 'chairs'],
             ],
             'programs' => $programs->map(function ($program) {
                 return [
                     'id' => $program->id,
                     'name' => $program->name,
                     'code' => $program->code,
-                    'chair' => $program->chair,
+                    'chair' => $program->chairUser?->name ?? $program->chair,
                     'accreditationStatus' => $program->accreditation_status,
                     'complianceScore' => (int) $program->compliance_score,
                     'documentCount' => Document::where('program_id', $program->id)->count(),

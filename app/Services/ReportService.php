@@ -126,7 +126,7 @@ class ReportService
      */
     public function programReport(int $programId): array
     {
-        $program = Program::with('college')->findOrFail($programId);
+        $program = Program::with(['college', 'chairUser'])->findOrFail($programId);
 
         $cycles = AccreditationCycle::where('program_id', $programId)
             ->with(['areas.chair', 'areas.documents', 'areas.members.user', 'areas.tasks.assignments.user'])
@@ -193,7 +193,7 @@ class ReportService
                 'id' => $program->id,
                 'name' => $program->name,
                 'code' => $program->code,
-                'chair' => $program->chair,
+                'chair' => $program->chairUser?->name ?? $program->chair,
                 'accreditationStatus' => $program->accreditation_status,
                 'complianceScore' => $program->compliance_score,
                 'collegeName' => $program->college?->name ?? 'N/A',
@@ -222,7 +222,7 @@ class ReportService
         $college = College::findOrFail($collegeId);
 
         $programs = Program::where('college_id', $collegeId)
-            ->with(['accreditationCycles.areas.documents'])
+            ->with(['accreditationCycles.areas.documents', 'chairUser'])
             ->orderBy('name')
             ->get();
 
@@ -264,7 +264,7 @@ class ReportService
                 'programId' => $program->id,
                 'programName' => $program->name,
                 'programCode' => $program->code,
-                'chair' => $program->chair,
+                'chair' => $program->chairUser?->name ?? $program->chair,
                 'accreditationStatus' => $program->accreditation_status,
                 'complianceScore' => $program->compliance_score,
                 'totalCycles' => $program->accreditationCycles->count(),

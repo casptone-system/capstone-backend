@@ -3,11 +3,14 @@
 namespace Tests;
 
 use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\Schema;
 
 abstract class TestCase extends BaseTestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         // Set env early so the application boots with test configuration
@@ -32,8 +35,6 @@ abstract class TestCase extends BaseTestCase
 
         // Reset cache between tests
         \Illuminate\Support\Facades\Cache::flush();
-
-        // Do not disable middleware globally; allow feature tests to exercise middleware
 
         if ($this->app->environment('testing') && Schema::hasTable('permissions')) {
             $this->seed(RolePermissionSeeder::class);

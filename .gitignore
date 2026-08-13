@@ -23,4 +23,5 @@ Homestead.json
 Homestead.yaml
 Thumbs.db
 database/*.sqlite
+.e2e-credentials.json
 database/*.sqlite3

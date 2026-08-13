@@ -36,6 +36,7 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
         'profile_photo',
         'program_id',
         'team_id',
+        'college_id',
     ];
 
     /**
@@ -74,6 +75,11 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
     public function program()
     {
         return $this->belongsTo(Program::class, 'program_id');
+    }
+
+    public function college()
+    {
+        return $this->belongsTo(College::class, 'college_id');
     }
 
     /**
@@ -172,6 +178,10 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
 
     public function getEffectiveCollegeId(): ?int
     {
+        if ($this->college_id) {
+            return $this->college_id;
+        }
+
         $programId = $this->getEffectiveProgramId();
         if (! $programId) {
             return null;
