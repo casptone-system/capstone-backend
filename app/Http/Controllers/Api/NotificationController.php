@@ -112,6 +112,45 @@ class NotificationController extends Controller
     }
 
     /**
+     * Download an instrument file attached to a notification.
+     */
+    public function downloadInstrumentFile(Request $request, string $notificationId)
+    {
+        $notification = $request->user()->notifications()->where('id', $notificationId)->first();
+
+        if (!$notification) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Notification not found.',
+            ], 404);
+        }
+
+        $filePath = $notification->data['instrument_file_path'] ?? null;
+        $fileName = $notification->data['instrument_file_name'] ?? null;
+
+        if (!$filePath || !$fileName) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No instrument file attached to this notification.',
+            ], 400);
+        }
+
+        $fullPath = storage_path('app/private/' . $filePath);
+
+        if (!file_exists($fullPath)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'File not found on server.',
+            ], 404);
+        }
+
+        // Mark the notification as read when downloaded
+        $notification->markAsRead();
+
+        return response()->download($fullPath, $fileName);
+    }
+
+    /**
      * Remove the specified notification.
      */
     public function destroy(Request $request, string $id)

@@ -303,9 +303,17 @@ class ReviewController extends Controller
             return 'Member';
         }
 
+        if ($action === 'revision_request' || $action === 'reject') {
+            return match ($currentStatus) {
+                'Submitted' => 'Area Chair',
+                'Area Approved' => 'Dean',
+                default => 'Member',
+            };
+        }
+
         return match ($currentStatus) {
             'Submitted' => 'Area Chair',
-            'Area Approved' => 'Program Chair',
+            'Area Approved' => 'Dean',
             default => 'Member',
         };
     }

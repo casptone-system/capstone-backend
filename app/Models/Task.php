@@ -29,6 +29,10 @@ class Task extends Model
         'In Progress',
         'Completed',
         'Overdue',
+        'Submitted',
+        'Returned',
+        'Resubmitted',
+        'Approved',
     ];
 
     /**
@@ -38,12 +42,19 @@ class Task extends Model
      */
     protected $fillable = [
         'area_id',
+        'accreditation_cycle_id',
+        'program_id',
+        'requirement_id',
         'title',
         'description',
         'priority',
         'status',
         'due_date',
+        'deadline',
         'created_by',
+        'assigned_by',
+        'instructions',
+        'return_reason',
     ];
 
     /**
@@ -55,7 +66,12 @@ class Task extends Model
     {
         return [
             'due_date' => 'date',
+            'deadline' => 'date',
             'created_by' => 'integer',
+            'assigned_by' => 'integer',
+            'accreditation_cycle_id' => 'integer',
+            'program_id' => 'integer',
+            'requirement_id' => 'integer',
         ];
     }
 
@@ -81,5 +97,37 @@ class Task extends Model
     public function assignments(): HasMany
     {
         return $this->hasMany(TaskAssignment::class, 'task_id');
+    }
+
+    /**
+     * Get the accreditation cycle this task belongs to.
+     */
+    public function cycle(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationCycle::class, 'accreditation_cycle_id');
+    }
+
+    /**
+     * Get the program this task belongs to.
+     */
+    public function program(): BelongsTo
+    {
+        return $this->belongsTo(Program::class, 'program_id');
+    }
+
+    /**
+     * Get the accreditation requirement this task is based on.
+     */
+    public function requirement(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationRequirement::class, 'requirement_id');
+    }
+
+    /**
+     * Get the user who assigned this task.
+     */
+    public function assignedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_by');
     }
 }

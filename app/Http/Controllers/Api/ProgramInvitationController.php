@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Invitation;
 use App\Models\Program;
 use App\Models\ProgramMember;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
@@ -171,7 +172,7 @@ class ProgramInvitationController extends Controller
             return response()->json(['success' => false, 'message' => 'Invalid invitation.'], 404);
         }
 
-        if ($inv->status !== 'pending') {
+        if (! in_array($inv->status, ['pending', 'requested'], true)) {
             return response()->json(['success' => false, 'message' => 'Invitation is no longer valid.'], 400);
         }
 
@@ -199,23 +200,97 @@ class ProgramInvitationController extends Controller
             $inv->used_by = $user->id;
             $inv->accepted_at = now();
             $inv->save();
+            $inv->delete();
 
             return response()->json(['success' => true, 'message' => 'Already a member.'], 200);
         }
 
-        ProgramMember::create([
-            'program_id' => $inv->program_id,
-            'user_id' => $user->id,
-            'role' => $inv->role ?? 'member',
-            'joined_at' => now(),
-            'invited_by' => $inv->invited_by,
-        ]);
+        $isSelfInitiatedRequest = (int) ($inv->invited_by ?? 0) === (int) $user->id;
 
-        $inv->status = 'accepted';
+        if ($inv->status === 'pending' && ! $isSelfInitiatedRequest) {
+            ProgramMember::create([
+                'program_id' => $inv->program_id,
+                'user_id' => $user->id,
+                'role' => $inv->role ?? 'member',
+                'joined_at' => now(),
+                'invited_by' => $inv->invited_by,
+            ]);
+
+            $user->program_id = $inv->program_id;
+            $user->save();
+
+            $inv->status = 'accepted';
+            $inv->used_by = $user->id;
+            $inv->accepted_at = now();
+            $inv->save();
+            $inv->delete();
+
+            return response()->json(['success' => true, 'message' => 'Invitation accepted.'], 200);
+        }
+
+        $inv->status = 'requested';
         $inv->used_by = $user->id;
         $inv->accepted_at = now();
         $inv->save();
 
-        return response()->json(['success' => true, 'message' => 'Invitation accepted.'], 200);
+        return response()->json([
+            'success' => true,
+            'message' => 'Your program membership request has been sent to the dean or program chair for approval.',
+        ], 200);
+    }
+
+    public function approve(Request $request, string $token)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Authentication required.'], 401);
+        }
+
+        $inv = Invitation::where('token', $token)->first();
+        if (! $inv) {
+            return response()->json(['success' => false, 'message' => 'Invalid invitation.'], 404);
+        }
+
+        $this->authorize('approve', $inv);
+
+        if ($inv->status !== 'requested') {
+            return response()->json(['success' => false, 'message' => 'This request is not awaiting approval.'], 400);
+        }
+
+        $targetUser = User::whereRaw('LOWER(email) = ?', [strtolower((string) $inv->email)])->first();
+        if (! $targetUser) {
+            return response()->json(['success' => false, 'message' => 'The requested member could not be found.'], 404);
+        }
+
+        $member = ProgramMember::firstOrNew([
+            'program_id' => $inv->program_id,
+            'user_id' => $targetUser->id,
+        ]);
+
+        $member->role = $inv->role ?? 'faculty';
+        $member->joined_at = $member->joined_at ?? now();
+        $member->invited_by = $inv->invited_by;
+        $member->save();
+
+        $targetUser->program_id = $inv->program_id;
+        $targetUser->save();
+
+        if (($inv->role ?? 'faculty') === 'program-chair') {
+            $targetUser->assignRole('Program Chair');
+        } else {
+            $targetUser->assignRole('Faculty');
+        }
+
+        $inv->status = 'accepted';
+        $inv->used_by = $targetUser->id;
+        $inv->accepted_at = now();
+        $inv->save();
+        $inv->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Program membership approved successfully.',
+            'data' => $member,
+        ], 200);
     }
 }

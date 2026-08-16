@@ -59,7 +59,6 @@ class RolePermissionSeeder extends Seeder
             ],
             'QA' => [
                 'view dashboard',
-                'approve reviews',
                 'review reports',
                 'view audit logs',
             ],
@@ -74,6 +73,8 @@ class RolePermissionSeeder extends Seeder
                 'invite faculty',
                 'assign chairs',
                 'review reports',
+                'manage reviews',
+                'request revisions',
             ],
             'Area In-Charge' => [
                 'view dashboard',

@@ -100,6 +100,32 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
         return $this->belongsToMany(Program::class, 'program_members');
     }
 
+    /**
+     * Get conversations the user participates in
+     */
+    public function conversations()
+    {
+        return $this->belongsToMany(Conversation::class, 'conversation_participants')
+            ->withPivot('last_read_at', 'is_archived')
+            ->withTimestamps();
+    }
+
+    /**
+     * Get messages sent by the user
+     */
+    public function messagesSent(): HasMany
+    {
+        return $this->hasMany(Message::class, 'sender_id');
+    }
+
+    /**
+     * Get storage files owned by the user
+     */
+    public function storageFiles(): HasMany
+    {
+        return $this->hasMany(RoleStorageFile::class, 'user_id');
+    }
+
     public function invitationsSent()
     {
         return $this->hasMany(Invitation::class, 'invited_by');

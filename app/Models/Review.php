@@ -104,7 +104,7 @@ class Review extends Model
     {
         return match ($this->current_status) {
             'Submitted' => 'Area Chair',
-            'Area Approved' => 'Program Chair',
+            'Area Approved' => 'Dean',
             default => null,
         };
     }

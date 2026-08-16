@@ -2,13 +2,17 @@
 
 use App\Http\Controllers\Api\AccreditationAreaController;
 use App\Http\Controllers\Api\AccreditationCycleController;
+use App\Http\Controllers\Api\AccreditationStructureController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CollegeController;
 use App\Http\Controllers\Api\ProgramController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DeanController;
+use App\Http\Controllers\Api\FacultyTaskController;
+use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\QAController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\RoleStorageController;
@@ -40,18 +44,41 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
 
     // Programs (GET /programs, POST /programs + full CRUD)
     Route::apiResource('programs', ProgramController::class);
+    Route::delete('programs/{program}/members/{user}', [ProgramController::class, 'removeMember']);
 
     // Accreditation Cycles (CRUD + history + dashboard)
+    Route::get('vpaa/dashboard', [AccreditationCycleController::class, 'vpaaDashboard']);
     Route::get('accreditation-cycles/dashboard', [AccreditationCycleController::class, 'dashboard']);
     Route::get('accreditation-cycles/history/{program}', [AccreditationCycleController::class, 'history']);
+    Route::post('accreditation-cycles/{accreditationCycle}/acknowledge', [AccreditationCycleController::class, 'acknowledge']);
+    Route::post('accreditation-cycles/{accreditationCycle}/forward-to-chair', [AccreditationCycleController::class, 'forwardToChair']);
+    Route::post('accreditation-cycles/{accreditationCycle}/set-requirements', [AccreditationCycleController::class, 'setRequirements']);
+    Route::post('accreditation-cycles/{accreditationCycle}/program-chair-setup', [AccreditationCycleController::class, 'programChairSetupInfo']);
+    Route::get('accreditation-cycles/{accreditationCycle}/structure', [AccreditationStructureController::class, 'show']);
+    Route::post('accreditation-cycles/{accreditationCycle}/structure', [AccreditationStructureController::class, 'store']);
+    Route::post('accreditation-cycles/{accreditationCycle}/dean-validate', [AccreditationCycleController::class, 'deanValidate']);
+    Route::post('accreditation-cycles/{accreditationCycle}/vpaa-monitor', [AccreditationCycleController::class, 'vpaaMonitor']);
     Route::apiResource('accreditation-cycles', AccreditationCycleController::class);
 
     // Accreditation Areas (CRUD + assign chair + manage members + progress)
     Route::post('accreditation-areas/{accreditationArea}/assign-chair', [AccreditationAreaController::class, 'assignChair']);
+    Route::post('accreditation-areas/{accreditationArea}/assign-in-charge', [AccreditationStructureController::class, 'assignInCharge']);
+    Route::get('accreditation-areas/{accreditationArea}/requirements', [AccreditationStructureController::class, 'requirements']);
     Route::post('accreditation-areas/{accreditationArea}/members', [AccreditationAreaController::class, 'addMember']);
     Route::delete('accreditation-areas/{accreditationArea}/members/{member}', [AccreditationAreaController::class, 'removeMember']);
     Route::get('accreditation-areas/{accreditationArea}/progress', [AccreditationAreaController::class, 'progress']);
+    Route::post('accreditation-areas/submit-files', [AccreditationAreaController::class, 'submitFiles']);
     Route::apiResource('accreditation-areas', AccreditationAreaController::class);
+
+    // Faculty Task Assignment (Stage 3)
+    Route::post('accreditation-requirements/{requirement}/assign-faculty', [FacultyTaskController::class, 'assignFacultyToRequirement']);
+    Route::get('faculty/tasks', [FacultyTaskController::class, 'getFacultyTasks']);
+    Route::get('faculty/tasks/{task}', [FacultyTaskController::class, 'getFacultyTask']);
+    Route::patch('faculty/tasks/{task}', [FacultyTaskController::class, 'updateFacultyTask']);
+    Route::post('faculty/tasks/{task}/submit', [FacultyTaskController::class, 'submitFacultyTask']);
+    Route::get('program-chair/tasks-pending-review', [FacultyTaskController::class, 'getProgramChairPendingReview']);
+    Route::post('faculty/tasks/{task}/approve', [FacultyTaskController::class, 'approveFacultyTask']);
+    Route::post('faculty/tasks/{task}/return', [FacultyTaskController::class, 'returnFacultyTask']);
 
     // Tasks (CRUD + assign members + mark complete + progress)
     Route::post('tasks/{task}/assign-members', [TaskController::class, 'assignMembers']);
@@ -68,8 +95,16 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
 
     // Role-specific storage vaults
     Route::get('role-storage', [RoleStorageController::class, 'index']);
+    Route::get('role-storage/storage', [RoleStorageController::class, 'storageSummary']);
     Route::post('role-storage/folders', [RoleStorageController::class, 'store']);
+    Route::patch('role-storage/folders/{folder}/rename', [RoleStorageController::class, 'renameFolder']);
+    Route::patch('role-storage/folders/{folder}/move', [RoleStorageController::class, 'moveFolder']);
     Route::post('role-storage/folders/{folder}/upload', [RoleStorageController::class, 'upload']);
+    Route::patch('role-storage/files/{file}', [RoleStorageController::class, 'update']);
+    Route::post('role-storage/files/{file}/favorite', [RoleStorageController::class, 'favoriteFile']);
+    Route::post('role-storage/files/{file}/trash', [RoleStorageController::class, 'trashFile']);
+    Route::post('role-storage/files/{file}/restore', [RoleStorageController::class, 'restoreFile']);
+    Route::post('role-storage/files/{file}/link-evidence', [RoleStorageController::class, 'linkEvidence']);
     Route::get('role-storage/files/{file}/download', [RoleStorageController::class, 'download']);
     Route::delete('role-storage/files/{file}', [RoleStorageController::class, 'destroyFile']);
 
@@ -86,17 +121,42 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('notifications/mark-all-read', [NotificationController::class, 'markAllAsRead']);
     Route::get('notifications/{id}', [NotificationController::class, 'show']);
     Route::post('notifications/{id}/mark-read', [NotificationController::class, 'markAsRead']);
+    Route::get('notifications/{id}/download-instrument', [NotificationController::class, 'downloadInstrumentFile']);
     Route::delete('notifications/{id}', [NotificationController::class, 'destroy']);
     Route::apiResource('notifications', NotificationController::class)->only(['index']);
+
+    // Messaging (conversations, messages, attachments)
+    Route::get('messages/unread-count', [MessageController::class, 'getUnreadCount']);
+    Route::get('messages', [MessageController::class, 'listConversations']);
+    Route::post('messages/conversations', [MessageController::class, 'createConversation']);
+    Route::get('messages/conversations/{conversation}', [MessageController::class, 'getConversation']);
+    Route::post('messages/conversations/{conversation}/send', [MessageController::class, 'sendMessage']);
+    Route::post('messages/conversations/{conversation}/mark-read', [MessageController::class, 'markAsRead']);
+    Route::post('messages/conversations/{conversation}/archive', [MessageController::class, 'archiveConversation']);
+
+    // QA Dashboard and Reports (monitoring and viewing only)
+    Route::get('qa/dashboard', [QAController::class, 'dashboard']);
+    Route::get('qa/reports/program-readiness', [QAController::class, 'programReadinessReport']);
+    Route::get('qa/reports/college-comparison', [QAController::class, 'collegeComparisonReport']);
+    Route::get('qa/reports/at-risk-programs', [QAController::class, 'atRiskProgramsReport']);
+    Route::get('qa/accreditations', [QAController::class, 'accreditationPrograms']);
+    Route::get('qa/accreditations/{cycle}', [QAController::class, 'accreditationDetail']);
 
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);
 
     Route::get('dean/dashboard', [DeanController::class, 'dashboard']);
     Route::get('dean/programs', [DeanController::class, 'programs']);
+    Route::get('dean/programs/{programId}/chair', [DeanController::class, 'getProgramChair']);
+    Route::get('dean/documents', [DeanController::class, 'documents']);
+    Route::get('dean/review-queue', [DeanController::class, 'reviewQueue']);
+    Route::post('dean/notify-program-chair', [DeanController::class, 'notifyProgramChair']);
 
     Route::get('users', [UserController::class, 'index']);
     Route::get('program-chairs', [UserController::class, 'programChairs']);
+    Route::get('area-in-charges', [UserController::class, 'areaInCharges']);
+    Route::get('message-recipients', [UserController::class, 'messageRecipients']);
+    Route::get('program-faculty', [UserController::class, 'programFaculty']);
 
     // Super Administrator user management and administration
     Route::get('admin/dashboard', [UserController::class, 'dashboard']);
@@ -145,6 +205,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('invitations/{token}/resend', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'resend']);
     Route::post('invitations/{token}/revoke', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'revoke']);
     Route::post('invitations/{token}/accept', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'accept']);
+    Route::post('invitations/{token}/approve', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'approve']);
 
     // Reports (compliance, program, college, area, accreditation + PDF/Excel exports)
     Route::get('reports', [ReportController::class, 'index']);

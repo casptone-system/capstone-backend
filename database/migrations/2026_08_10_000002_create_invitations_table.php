@@ -19,7 +19,7 @@ return new class extends Migration
             $table->foreignId('used_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('expires_at')->nullable();
             $table->timestamp('accepted_at')->nullable();
-            $table->enum('status', ['pending', 'accepted', 'expired', 'revoked'])->default('pending');
+            $table->enum('status', ['pending', 'requested', 'accepted', 'expired', 'revoked'])->default('pending');
             $table->timestamps();
         });
     }

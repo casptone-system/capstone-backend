@@ -34,17 +34,50 @@ class AccreditationCycle extends Model
     ];
 
     /**
+     * Accreditation workflow status values.
+     * Tracks the handoff state: VPAA → Dean → PC → Faculty
+     */
+    public const WORKFLOW_STATUSES = [
+        'Initial Notice',
+        'Dean Acknowledged',
+        'Forwarded to Chair',
+        'Requirements Set',
+        'Faculty Assignment',
+        'Evidence Submitted',
+        'Dean Validated',
+        'VPAA Monitoring',
+        'Ready',
+        'At Risk',
+    ];
+
+    /**
+     * Accreditation phases (deprecated, use WORKFLOW_STATUSES).
+     * @deprecated Use WORKFLOW_STATUSES instead
+     */
+    public const PHASES = self::WORKFLOW_STATUSES;
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var list<string>
      */
     protected $fillable = [
         'program_id',
+        'college_id',
+        'instrument_id',
         'level',
         'status',
+        'phase',
+        'workflow_status',
+        'instrument_name',
         'valid_until',
         'scheduled_visit',
         'remarks',
+        'acknowledged_by',
+        'acknowledged_at',
+        'forwarded_by',
+        'forwarded_at',
+        'program_chair_id',
     ];
 
     /**
@@ -57,6 +90,8 @@ class AccreditationCycle extends Model
         return [
             'valid_until' => 'date',
             'scheduled_visit' => 'date',
+            'acknowledged_at' => 'datetime',
+            'forwarded_at' => 'datetime',
         ];
     }
 
@@ -66,6 +101,16 @@ class AccreditationCycle extends Model
     public function program(): BelongsTo
     {
         return $this->belongsTo(Program::class);
+    }
+
+    public function college(): BelongsTo
+    {
+        return $this->belongsTo(College::class);
+    }
+
+    public function instrument(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationInstrument::class, 'instrument_id');
     }
 
     /**

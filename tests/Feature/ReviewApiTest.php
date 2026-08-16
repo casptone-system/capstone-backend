@@ -192,7 +192,7 @@ class ReviewApiTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('data.currentStatus', 'Area Approved')
-            ->assertJsonPath('data.expectedReviewerRole', 'Program Chair');
+            ->assertJsonPath('data.expectedReviewerRole', 'Dean');
 
         $this->assertDatabaseHas('review_comments', [
             'review_id' => $this->review->id,
@@ -216,13 +216,13 @@ class ReviewApiTest extends TestCase
         $this->postJson('/api/reviews/' . $this->review->id . '/approve');
         $this->assertEquals('Area Approved', $this->review->fresh()->current_status);
 
-        // Area Approved → Ready (program chair)
-        $programChair = User::factory()->create();
-        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
-        $programChair->assignRole('Program Chair');
-        $programChair->program_id = $this->program->id;
-        $programChair->save();
-        Sanctum::actingAs($programChair);
+        // Area Approved → Ready (dean)
+        $dean = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+        $dean->college_id = $this->program->college_id;
+        $dean->save();
+        Sanctum::actingAs($dean);
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
 
         $response->assertStatus(200)
@@ -230,6 +230,31 @@ class ReviewApiTest extends TestCase
             ->assertJsonPath('data.isTerminal', true);
 
         $this->assertNotNull($this->review->fresh()->completed_at);
+    }
+
+    public function test_dean_can_approve_review_after_area_approval(): void
+    {
+        $this->review->update(['current_status' => 'Area Approved', 'submitted_at' => now()]);
+
+        $dean = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+        $dean->college_id = $this->program->college_id;
+        $dean->save();
+        Sanctum::actingAs($dean);
+
+        $response = $this->postJson('/api/reviews/' . $this->review->id . '/approve');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.currentStatus', 'Ready')
+            ->assertJsonPath('data.isTerminal', true);
+
+        $this->assertDatabaseHas('review_comments', [
+            'review_id' => $this->review->id,
+            'action' => 'approve',
+            'role' => 'Dean',
+        ]);
     }
 
     public function test_dean_cannot_approve_review(): void
@@ -297,13 +322,13 @@ class ReviewApiTest extends TestCase
     {
         $this->review->update(['current_status' => 'Area Approved']);
 
-        // act as Program Chair to reject
-        $programChair = User::factory()->create();
-        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
-        $programChair->assignRole('Program Chair');
-        $programChair->program_id = $this->program->id;
-        $programChair->save();
-        Sanctum::actingAs($programChair);
+        // act as Dean to reject when the review has reached the college-level handoff
+        $dean = User::factory()->create();
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+        $dean->college_id = $this->program->college_id;
+        $dean->save();
+        Sanctum::actingAs($dean);
 
         $response = $this->postJson('/api/reviews/' . $this->review->id . '/reject', [
             'comment' => 'This does not meet the standards.',

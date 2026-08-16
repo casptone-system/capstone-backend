@@ -63,6 +63,10 @@ class DocumentPolicy
             return $document->program_id === $user->getEffectiveProgramId();
         }
 
+        if ($user->isDean()) {
+            return $document->program?->college_id === $user->getEffectiveCollegeId();
+        }
+
         return false;
     }
 

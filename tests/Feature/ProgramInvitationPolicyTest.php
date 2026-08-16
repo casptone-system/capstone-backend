@@ -90,14 +90,17 @@ class ProgramInvitationPolicyTest extends TestCase
 
     public function test_faculty_can_accept_valid_invitation(): void
     {
+        $dean = $this->actingAsRole('dean', ['email' => 'dean@example.com']);
         $faculty = $this->actingAsRole('faculty', ['email' => 'faculty@example.com']);
         $program = Program::factory()->create();
+        $dean->forceFill(['program_id' => $program->id, 'college_id' => $program->college_id])->save();
+
         $invitation = Invitation::create([
             'program_id' => $program->id,
             'email' => 'faculty@example.com',
             'role' => 'faculty',
             'token' => 'VALIDTOKEN123456',
-            'invited_by' => $faculty->id,
+            'invited_by' => $dean->id,
             'expires_at' => now()->addDay(),
             'status' => 'pending',
         ]);
@@ -108,6 +111,7 @@ class ProgramInvitationPolicyTest extends TestCase
             ->assertJsonPath('success', true);
 
         $this->assertDatabaseHas('program_members', ['program_id' => $program->id, 'user_id' => $faculty->id]);
+        $this->assertDatabaseMissing('invitations', ['token' => $invitation->token]);
     }
 
     public function test_faculty_cannot_accept_invitation_for_another_email(): void
@@ -127,6 +131,84 @@ class ProgramInvitationPolicyTest extends TestCase
         $response = $this->postJson('/api/invitations/' . $invitation->token . '/accept');
 
         $response->assertStatus(403);
+    }
+
+    public function test_faculty_request_requires_approval_before_membership_is_created(): void
+    {
+        $faculty = $this->actingAsRole('faculty', ['email' => 'faculty@example.com']);
+        $program = Program::factory()->create();
+        $invitation = Invitation::create([
+            'program_id' => $program->id,
+            'email' => 'faculty@example.com',
+            'role' => 'faculty',
+            'token' => 'REQUESTAPPROVALTOKEN',
+            'invited_by' => $faculty->id,
+            'expires_at' => now()->addDay(),
+            'status' => 'pending',
+        ]);
+
+        $response = $this->postJson('/api/invitations/' . $invitation->token . '/accept');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $this->assertDatabaseMissing('program_members', ['program_id' => $program->id, 'user_id' => $faculty->id]);
+        $this->assertDatabaseHas('invitations', ['token' => $invitation->token, 'status' => 'requested']);
+    }
+
+    public function test_dean_can_approve_pending_faculty_membership_request(): void
+    {
+        $dean = $this->actingAsRole('dean');
+        $program = Program::factory()->create();
+        $dean->forceFill(['program_id' => $program->id, 'college_id' => $program->college_id])->save();
+
+        $faculty = User::factory()->create([
+            'email' => 'pendingfaculty@example.com',
+            'college_id' => $program->college_id,
+            'program_id' => null,
+        ]);
+        $faculty->assignRole('faculty');
+
+        $invitation = Invitation::create([
+            'program_id' => $program->id,
+            'email' => $faculty->email,
+            'role' => 'faculty',
+            'token' => 'APPROVEINVITATIONTOKEN',
+            'invited_by' => $dean->id,
+            'expires_at' => now()->addDay(),
+            'status' => 'requested',
+        ]);
+
+        $response = $this->postJson('/api/invitations/' . $invitation->token . '/approve');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $this->assertDatabaseHas('program_members', ['program_id' => $program->id, 'user_id' => $faculty->id, 'role' => 'faculty']);
+        $this->assertDatabaseMissing('invitations', ['token' => $invitation->token]);
+    }
+
+    public function test_faculty_can_be_promoted_to_program_chair(): void
+    {
+        $dean = $this->actingAsRole('dean');
+        $program = Program::factory()->create();
+        $dean->forceFill(['program_id' => $program->id, 'college_id' => $program->college_id])->save();
+
+        $faculty = User::factory()->create([
+            'email' => 'chaircandidate@example.com',
+            'college_id' => $program->college_id,
+            'program_id' => null,
+        ]);
+        $faculty->assignRole('faculty');
+
+        $response = $this->putJson('/api/programs/' . $program->id, ['chair_id' => $faculty->id]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $program->refresh();
+        $this->assertEquals($faculty->id, $program->chair_id);
+        $this->assertDatabaseHas('program_members', ['program_id' => $program->id, 'user_id' => $faculty->id, 'role' => 'program-chair']);
     }
 
     public function test_expired_invitation_cannot_be_accepted(): void

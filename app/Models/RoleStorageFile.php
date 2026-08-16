@@ -19,6 +19,14 @@ class RoleStorageFile extends Model
         'mime_type',
         'file_size',
         'file_path',
+        'is_favorite',
+        'status',
+        'deleted_at',
+    ];
+
+    protected $casts = [
+        'is_favorite' => 'boolean',
+        'deleted_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

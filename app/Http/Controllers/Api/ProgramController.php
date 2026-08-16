@@ -103,7 +103,7 @@ class ProgramController extends Controller
 
         if (! empty($chairId)) {
             $chairUser = User::find($chairId);
-            if (! $chairUser || ! $chairUser->hasRole('Program Chair')) {
+            if (! $chairUser || ! $this->userHasProgramChairRole($chairUser)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'The selected program chair is invalid.',
@@ -233,6 +233,45 @@ class ProgramController extends Controller
         ], 200);
     }
 
+    private function userHasProgramChairRole(User $user): bool
+    {
+        return $user->hasRole('Program Chair')
+            || $user->hasRole('program-chair')
+            || $user->hasRole('ProgramChair')
+            || $user->hasRole('faculty')
+            || $user->hasCanonicalRole('program-chair')
+            || $user->hasCanonicalRole('faculty')
+            || $user->hasAnyCanonicalRole(['program-chair', 'programchair', 'program chair', 'faculty']);
+    }
+
+    public function removeMember(Program $program, User $user)
+    {
+        $member = ProgramMember::where('program_id', $program->id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (! $member) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This faculty member is not assigned to the program.',
+            ], 404);
+        }
+
+        $this->authorize('remove', $member);
+
+        $member->delete();
+
+        if ((int) $user->program_id === (int) $program->id) {
+            $user->program_id = null;
+            $user->save();
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Faculty member removed from the program.',
+        ], 200);
+    }
+
     /**
      * Update the specified program.
      */
@@ -269,7 +308,7 @@ class ProgramController extends Controller
             $chairId = $validated['chair_id'] ?? null;
             if (! empty($chairId)) {
                 $chairUser = User::find($chairId);
-                if (! $chairUser || ! $chairUser->hasRole('Program Chair')) {
+                if (! $chairUser || ! $this->userHasProgramChairRole($chairUser)) {
                     return response()->json([
                         'success' => false,
                         'message' => 'The selected program chair is invalid.',
@@ -305,7 +344,7 @@ class ProgramController extends Controller
             }
         }
 
-        DB::transaction(function () use ($validated, $program, $oldChair, $newChair) {
+        DB::transaction(function () use ($validated, $program, $oldChair, $newChair, $request) {
             $program->update($validated);
 
             if ($oldChair && (! $newChair || $oldChair->id !== $newChair->id)) {
@@ -314,6 +353,7 @@ class ProgramController extends Controller
 
             if ($newChair) {
                 $this->assignProgramChairToProgram($newChair, $program);
+                $this->ensureProgramChairMembership($newChair, $program, $request->user());
             }
         });
 
@@ -451,6 +491,10 @@ class ProgramController extends Controller
             $updated = true;
         }
 
+        if (! $chairUser->hasRole('Program Chair')) {
+            $chairUser->assignRole('Program Chair');
+        }
+
         if ($updated) {
             $chairUser->save();
         }
@@ -458,7 +502,9 @@ class ProgramController extends Controller
 
     private function ensureProgramChairMembership(User $chairUser, Program $program, User $assignedBy): void
     {
-        if (! ProgramMember::where('program_id', $program->id)->where('user_id', $chairUser->id)->exists()) {
+        $member = ProgramMember::where('program_id', $program->id)->where('user_id', $chairUser->id)->first();
+
+        if (! $member) {
             ProgramMember::create([
                 'program_id' => $program->id,
                 'user_id' => $chairUser->id,
@@ -466,7 +512,13 @@ class ProgramController extends Controller
                 'joined_at' => now(),
                 'invited_by' => $assignedBy->id,
             ]);
+            return;
         }
+
+        $member->role = 'program-chair';
+        $member->joined_at = $member->joined_at ?? now();
+        $member->invited_by = $member->invited_by ?? $assignedBy->id;
+        $member->save();
     }
 
     private function detachPreviousChairFromProgram(User $previousChair, Program $program): void

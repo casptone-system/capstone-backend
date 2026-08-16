@@ -54,7 +54,7 @@ class ReviewPolicy
 
         return match ($review->current_status) {
             'Submitted' => $user->isAreaIncharge() && $user->isAssignedToArea($review->area),
-            'Area Approved' => $user->isProgramChair() && $this->belongsToProgram($user, $review),
+            'Area Approved' => $user->isDean() && $this->belongsToCollege($user, $review),
             default => false,
         };
     }
@@ -86,5 +86,16 @@ class ReviewPolicy
         }
 
         return (int) $review->cycle?->program_id === (int) $programId;
+    }
+
+    protected function belongsToCollege(User $user, Review $review): bool
+    {
+        $collegeId = $user->getEffectiveCollegeId();
+
+        if (! $collegeId) {
+            return false;
+        }
+
+        return (int) $review->cycle?->program?->college_id === (int) $collegeId;
     }
 }

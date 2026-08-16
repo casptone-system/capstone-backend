@@ -18,6 +18,8 @@ class UserResource extends JsonResource
             $roleSlug = preg_replace('/[^a-z0-9\-]/', '', $roleSlug);
         }
 
+        $college = $this->college;
+
         return [
             'id' => $this->id,
             'name' => trim(sprintf('%s %s %s', $this->first_name, $this->middle_name ?? '', $this->last_name)),
@@ -35,6 +37,12 @@ class UserResource extends JsonResource
             'roles' => $roles->values(),
             'permissions' => $this->getPermissionNames(),
             'college_id' => $this->college_id ?? null,
+            'collegeId' => $this->college_id ?? null,
+            'college' => $college ? [
+                'id' => $college->id,
+                'name' => $college->name,
+                'code' => $college->code,
+            ] : null,
             'teamId' => $this->team_id ?? null,
             'team_id' => $this->team_id ?? null,
             'programId' => $this->program_id ?? null,

@@ -487,10 +487,10 @@ class NotificationApiTest extends TestCase
             'current_status' => 'Area Approved',
         ]);
 
-        // Act as a Program Chair for the same program to reject
-        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
-        $this->user->assignRole('Program Chair');
-        $this->user->program_id = $this->program->id;
+        // Act as the Dean for the program's college to reject at the college-level handoff
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $this->user->assignRole('Dean');
+        $this->user->college_id = $this->program->college_id;
         $this->user->save();
 
         $response = $this->postJson('/api/reviews/' . $review->id . '/reject', [

@@ -6,6 +6,8 @@ use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
 use App\Models\Document;
 use App\Models\Program;
+use App\Models\RoleStorageFile;
+use App\Models\RoleStorageFolder;
 use App\Models\Task;
 use App\Models\User;
 use Spatie\Permission\Models\Role;
@@ -203,6 +205,53 @@ class DocumentApiTest extends TestCase
         $this->assertDatabaseHas('document_versions', [
             'version' => 1,
             'original_name' => 'document.pdf',
+        ]);
+    }
+
+    public function test_faculty_can_link_role_storage_file_as_accreditation_evidence(): void
+    {
+        Storage::fake('local');
+
+        $folder = RoleStorageFolder::create([
+            'user_id' => $this->user->id,
+            'role' => 'faculty',
+            'name' => 'My Documents',
+        ]);
+
+        $storedPath = Storage::disk('local')->put('role-storage/' . $this->user->id . '/faculty/' . $folder->id . '/sample.pdf', 'pdf-content');
+
+        $storageFile = RoleStorageFile::create([
+            'user_id' => $this->user->id,
+            'folder_id' => $folder->id,
+            'role' => 'faculty',
+            'name' => 'sample.pdf',
+            'original_name' => 'sample.pdf',
+            'mime_type' => 'application/pdf',
+            'file_size' => 11,
+            'file_path' => $storedPath,
+            'status' => 'active',
+        ]);
+
+        $response = $this->postJson('/api/role-storage/files/' . $storageFile->id . '/link-evidence', [
+            'program_id' => $this->program->id,
+            'area_id' => $this->area->id,
+            'task_id' => $this->task->id,
+            'title' => 'Linked Evidence Sample',
+            'description' => 'Created from faculty personal storage.',
+            'school_year' => '2026-2027',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.title', 'Linked Evidence Sample')
+            ->assertJsonPath('data.programId', $this->program->id)
+            ->assertJsonPath('data.areaId', $this->area->id)
+            ->assertJsonPath('data.taskId', $this->task->id);
+
+        $this->assertDatabaseHas('documents', [
+            'title' => 'Linked Evidence Sample',
+            'program_id' => $this->program->id,
+            'uploaded_by' => $this->user->id,
         ]);
     }
 

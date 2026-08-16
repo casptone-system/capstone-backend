@@ -52,7 +52,7 @@ class UserController extends Controller
 
     private function ensureDeanHasValidCollege(array $validated): ?\Illuminate\Http\JsonResponse
     {
-        if (strtolower($validated['role']) !== 'dean') {
+        if (strtolower((string) ($validated['role'] ?? '')) !== 'dean') {
             return null;
         }
 
@@ -90,6 +90,31 @@ class UserController extends Controller
         return null;
     }
 
+    private function ensureNoDuplicateDeanForCollege(?int $collegeId, ?User $user = null): ?\Illuminate\Http\JsonResponse
+    {
+        if (! $collegeId) {
+            return null;
+        }
+
+        $query = User::whereNotNull('college_id')
+            ->where('college_id', $collegeId)
+            ->whereHas('roles', fn ($query) => $query->where('name', 'Dean'));
+
+        if ($user) {
+            $query->whereKeyNot($user->id);
+        }
+
+        if ($query->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This college already has an active Dean.',
+                'errors' => ['college_id' => ['This college already has an active Dean.']],
+            ], 422);
+        }
+
+        return null;
+    }
+
     public function dashboard(Request $request)
     {
         $actor = $this->ensureSuperAdmin($request);
@@ -115,14 +140,25 @@ class UserController extends Controller
     public function index(Request $request)
     {
         $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) {
+        $user = $request->user();
+
+        if (! $actor && (! $user || ! $user->hasRole('Dean'))) {
             return response()->json(['success' => false, 'message' => 'You do not have permission to view users.'], 403);
         }
 
-        $users = User::query()
-            ->with(['program', 'team'])
-            ->latest()
-            ->paginate($request->get('per_page', 20));
+        $query = User::query()->with(['program', 'team']);
+
+        if ($user && $user->hasRole('Dean')) {
+            $collegeId = $user->college_id ?? $user->getEffectiveCollegeId();
+            if ($collegeId) {
+                $query->where(function ($q) use ($collegeId) {
+                    $q->where('college_id', $collegeId)
+                        ->orWhereIn('program_id', Program::where('college_id', $collegeId)->pluck('id'));
+                });
+            }
+        }
+
+        $users = $query->latest()->paginate($request->get('per_page', 20));
 
         return response()->json([
             'success' => true,
@@ -164,23 +200,55 @@ class UserController extends Controller
             return $response;
         }
 
-        $user = User::create([
-            'first_name' => $validated['first_name'],
-            'last_name' => $validated['last_name'],
-            'middle_name' => $validated['middle_name'] ?? null,
-            'name' => trim(sprintf('%s %s %s', $validated['first_name'], $validated['middle_name'] ?? '', $validated['last_name'])),
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'phone_number' => $validated['phone'] ?? null,
-            'birth_date' => $validated['birthdate'] ?? null,
-            'college_id' => $validated['college_id'] ?? null,
-            'program_id' => $validated['program_id'] ?? null,
-            'team_id' => $validated['team_id'] ?? null,
-        ]);
+        $collegeId = $this->resolveCollegeIdFromValidatedUserData($validated);
+        if ($response = $this->ensureNoDuplicateDeanForCollege($collegeId)) {
+            return $response;
+        }
 
-        $roleName = str_replace('_', ' ', $validated['role']);
-        $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-        $user->assignRole($role);
+        $user = null;
+
+        \Illuminate\Support\Facades\DB::transaction(function () use (&$user, $validated, $actor, $request) {
+            $user = User::create([
+                'first_name' => $validated['first_name'],
+                'last_name' => $validated['last_name'],
+                'middle_name' => $validated['middle_name'] ?? null,
+                'name' => trim(sprintf('%s %s %s', $validated['first_name'], $validated['middle_name'] ?? '', $validated['last_name'])),
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'phone_number' => $validated['phone'] ?? null,
+                'birth_date' => $validated['birthdate'] ?? null,
+                'college_id' => $validated['college_id'] ?? null,
+                'program_id' => $validated['program_id'] ?? null,
+                'team_id' => $validated['team_id'] ?? null,
+            ]);
+
+            $roleName = str_replace('_', ' ', $validated['role']);
+            $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+            $user->assignRole($role);
+
+            if (strtolower($validated['role']) === 'dean') {
+                $college = $user->college;
+                if ($college) {
+                    $user->notify(new \App\Notifications\DeanAssignedNotification($college, $actor, $user));
+                }
+            }
+
+            AuditLog::create([
+                'user_id' => $actor->id,
+                'user_email' => $actor->email,
+                'event' => 'USER_CREATED',
+                'method' => 'POST',
+                'path' => '/api/admin/users',
+                'status' => 'success',
+                'ip_address' => $request->ip(),
+            ]);
+        });
+
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'User creation failed.'], 500);
+        }
+
+        $user->refresh();
 
         AuditLog::create([
             'user_id' => $actor->id,
@@ -228,6 +296,67 @@ class UserController extends Controller
         return response()->json(['success' => true, 'data' => $chairs]);
     }
 
+    public function areaInCharges(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! $user->isProgramChair()) {
+            return response()->json(['success' => false, 'message' => 'Only a Program Chair can view Area In-Charges.'], 403);
+        }
+
+        $programId = $user->getEffectiveProgramId();
+        $members = User::role('Area In-Charge')
+            ->where('program_id', $programId)
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get(['id', 'name', 'first_name', 'middle_name', 'last_name', 'email', 'program_id'])
+            ->map(fn ($member) => [
+                'id' => $member->id,
+                'name' => $member->name ?: trim(sprintf('%s %s %s', $member->first_name, $member->middle_name ?? '', $member->last_name)),
+                'email' => $member->email,
+                'program_id' => $member->program_id,
+            ]);
+
+        return response()->json(['success' => true, 'data' => $members]);
+    }
+
+    public function messageRecipients(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user) {
+            abort(401);
+        }
+
+        $recipients = User::query()
+            ->where('id', '!=', $user->id)
+            ->with('roles:id,name')
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'profile_photo', 'program_id', 'college_id'])
+            ->map(fn (User $recipient) => [
+                'id' => $recipient->id,
+                'name' => $recipient->name,
+                'email' => $recipient->email,
+                'role' => $recipient->roles->pluck('name')->first() ?? 'User',
+                'profile_photo' => $recipient->profile_photo,
+            ]);
+
+        return response()->json(['success' => true, 'data' => $recipients]);
+    }
+
+    public function programFaculty(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! $user->isProgramChair()) {
+            abort(403, 'Only a Program Chair can view program faculty.');
+        }
+
+        $faculty = User::role('Faculty')
+            ->where('program_id', $user->getEffectiveProgramId())
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'profile_photo', 'program_id']);
+
+        return response()->json(['success' => true, 'data' => $faculty]);
+    }
+
     public function update(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);
@@ -252,6 +381,7 @@ class UserController extends Controller
         ]);
 
         $before = $user->toArray();
+        $requestedCollegeId = $validated['college_id'] ?? null;
         if (isset($validated['first_name'])) $user->first_name = $validated['first_name'];
         if (isset($validated['last_name'])) $user->last_name = $validated['last_name'];
         if (isset($validated['middle_name'])) $user->middle_name = $validated['middle_name'];
@@ -266,6 +396,15 @@ class UserController extends Controller
         if (isset($validated['role'])) {
             $roleName = str_replace('_', ' ', $validated['role']);
             $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+            $targetRole = strtolower($role->name);
+
+            if ($targetRole === 'dean') {
+                $collegeId = $requestedCollegeId ?? $user->college_id ?? $user->getEffectiveCollegeId();
+                if ($response = $this->ensureNoDuplicateDeanForCollege($collegeId, $user)) {
+                    return $response;
+                }
+            }
+
             $user->syncRoles([$role->name]);
             $newRoleName = $role->name;
         }

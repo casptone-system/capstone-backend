@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Program;
+use App\Models\ProgramMember;
 use App\Models\User;
 use Spatie\Permission\Models\Role;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -158,6 +159,119 @@ class ProgramApiTest extends TestCase
             'chair' => $chair->name,
             'college_id' => $college->id,
         ]);
+    }
+
+    public function test_dean_can_remove_faculty_member_from_program(): void
+    {
+        $dean = User::factory()->create([
+            'name' => 'Dean User',
+            'email' => 'dean-remove@example.com',
+        ]);
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+
+        $college = \App\Models\College::factory()->create();
+        $program = Program::factory()->create(['college_id' => $college->id]);
+        $dean->college_id = $college->id;
+        $dean->save();
+
+        $faculty = User::factory()->create([
+            'name' => 'Faculty User',
+            'email' => 'faculty-remove@example.com',
+            'college_id' => $college->id,
+            'program_id' => $program->id,
+        ]);
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $faculty->assignRole('Faculty');
+
+        ProgramMember::create([
+            'program_id' => $program->id,
+            'user_id' => $faculty->id,
+            'role' => 'faculty',
+            'joined_at' => now(),
+            'invited_by' => $dean->id,
+        ]);
+
+        $response = $this->actingAs($dean, 'sanctum')->deleteJson('/api/programs/' . $program->id . '/members/' . $faculty->id);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $this->assertDatabaseMissing('program_members', [
+            'program_id' => $program->id,
+            'user_id' => $faculty->id,
+        ]);
+    }
+
+    public function test_program_show_includes_progress_and_submission_stats(): void
+    {
+        $dean = User::factory()->create([
+            'name' => 'Dean User',
+            'email' => 'dean-progress@example.com',
+        ]);
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+
+        $college = \App\Models\College::factory()->create();
+        $program = Program::factory()->create(['college_id' => $college->id, 'compliance_score' => 78]);
+        $dean->college_id = $college->id;
+        $dean->save();
+
+        $faculty = User::factory()->create([
+            'name' => 'Faculty User',
+            'email' => 'faculty-progress@example.com',
+            'program_id' => $program->id,
+            'college_id' => $college->id,
+        ]);
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $faculty->assignRole('Faculty');
+
+        ProgramMember::create([
+            'program_id' => $program->id,
+            'user_id' => $faculty->id,
+            'role' => 'faculty',
+            'joined_at' => now(),
+            'invited_by' => $dean->id,
+        ]);
+
+        $response = $this->actingAs($dean, 'sanctum')->getJson('/api/programs/' . $program->id);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.facultyCount', 1)
+            ->assertJsonPath('data.requirementProgress.completionRate', 0)
+            ->assertJsonPath('data.submissionStats.totalDocuments', 0);
+    }
+
+    public function test_dean_can_view_users_in_their_college_using_users_endpoint(): void
+    {
+        $dean = User::factory()->create([
+            'name' => 'Dean User',
+            'email' => 'dean-users@example.com',
+        ]);
+        Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
+        $dean->assignRole('Dean');
+
+        $college = \App\Models\College::factory()->create();
+        $dean->college_id = $college->id;
+        $dean->save();
+
+        $faculty = User::factory()->create([
+            'name' => 'Faculty User',
+            'email' => 'faculty-users@example.com',
+            'college_id' => $college->id,
+        ]);
+        Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
+        $faculty->assignRole('Faculty');
+
+        $response = $this->actingAs($dean, 'sanctum')->getJson('/api/users');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.users.0.email', 'dean-users@example.com');
+
+        $emails = collect($response->json('data.users'))->pluck('email')->all();
+        $this->assertContains('faculty-users@example.com', $emails);
     }
 
     public function test_program_chair_endpoint_is_forbidden_for_non_privileged_users(): void

@@ -43,6 +43,8 @@ class Document extends Model
      */
     public const STATUSES = [
         'Active',
+        'Draft',
+        'Revision Requested',
         'Archived',
     ];
 

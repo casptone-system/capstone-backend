@@ -9,6 +9,7 @@ use App\Models\AccreditationArea;
 use App\Models\AreaMember;
 use App\Models\AccreditationCycle;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AccreditationAreaController extends Controller
 {
@@ -20,6 +21,7 @@ class AccreditationAreaController extends Controller
         $query = AccreditationArea::with('chair', 'members.user');
 
         if ($request->filled('cycle_id')) {
+            $this->assertCanViewCycle($request->user(), AccreditationCycle::findOrFail($request->cycle_id));
             $query->where('cycle_id', $request->cycle_id);
         }
 
@@ -70,6 +72,7 @@ class AccreditationAreaController extends Controller
      */
     public function show(AccreditationArea $accreditationArea)
     {
+        $this->assertCanViewCycle(request()->user(), $accreditationArea->cycle()->firstOrFail());
         $accreditationArea->load('chair', 'members.user', 'cycle.program');
 
         return response()->json([
@@ -84,6 +87,7 @@ class AccreditationAreaController extends Controller
      */
     public function update(Request $request, AccreditationArea $accreditationArea)
     {
+        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -105,6 +109,7 @@ class AccreditationAreaController extends Controller
      */
     public function destroy(AccreditationArea $accreditationArea)
     {
+        $this->assertCanManageCycle(request()->user(), $accreditationArea->cycle()->firstOrFail());
         $accreditationArea->delete();
 
         return response()->json([
@@ -118,6 +123,7 @@ class AccreditationAreaController extends Controller
      */
     public function assignChair(Request $request, AccreditationArea $accreditationArea)
     {
+        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'chair_id' => ['required', 'exists:users,id'],
         ]);
@@ -136,9 +142,12 @@ class AccreditationAreaController extends Controller
      */
     public function addMember(Request $request, AccreditationArea $accreditationArea)
     {
+        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'user_id' => ['required', 'exists:users,id'],
             'role' => ['nullable', 'string', 'max:255'],
+            'deadline' => ['nullable', 'date'],
+            'instructions' => ['nullable', 'string'],
         ]);
 
         $member = $accreditationArea->members()->create([
@@ -148,9 +157,36 @@ class AccreditationAreaController extends Controller
 
         $member->load('user');
 
+        // Send notification to faculty
+        $faculty = $member->user;
+        if ($faculty) {
+            $programChair = $request->user();
+            $faculty->notify(new \App\Notifications\FacultyAreaAssignmentNotification([
+                'program_chair_name' => $programChair->name,
+                'program_name' => $accreditationArea->cycle->program->name,
+                'area_name' => $accreditationArea->name,
+                'deadline' => $validated['deadline'] ?? now()->addDays(30)->format('Y-m-d'),
+                'instructions' => $validated['instructions'] ?? '',
+            ]));
+
+            // Log activity
+            \App\Models\AuditLog::create([
+                'user_id' => $request->user()->id,
+                'action' => 'assign_faculty_to_area',
+                'model' => 'AccreditationArea',
+                'model_id' => $accreditationArea->id,
+                'details' => [
+                    'faculty_id' => $faculty->id,
+                    'faculty_name' => $faculty->name,
+                    'area_name' => $accreditationArea->name,
+                    'role' => $validated['role'] ?? 'member',
+                ],
+            ]);
+        }
+
         return response()->json([
             'success' => true,
-            'message' => 'Member added successfully.',
+            'message' => 'Member added successfully. Faculty has been notified.',
             'data' => new AreaMemberResource($member),
         ], 201);
     }
@@ -180,6 +216,7 @@ class AccreditationAreaController extends Controller
      */
     public function progress(AccreditationArea $accreditationArea)
     {
+        $this->assertCanViewCycle(request()->user(), $accreditationArea->cycle()->firstOrFail());
         $accreditationArea->load('chair', 'members.user');
 
         $totalMembers = $accreditationArea->members->count();
@@ -197,5 +234,138 @@ class AccreditationAreaController extends Controller
                 ],
             ],
         ], 200);
+    }
+
+    /**
+     * Submit files and evidence for an accreditation area by faculty
+     */
+    public function submitFiles(Request $request)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+        }
+
+        $validated = $request->validate([
+            'area_id' => 'required|exists:accreditation_areas,id',
+            'files' => 'required|array|min:1',
+            'files.*' => 'file|mimes:pdf,doc,docx,xls,xlsx,ppt,pptx|max:10240',
+            'notes' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            $area = AccreditationArea::findOrFail($validated['area_id']);
+
+            // Verify faculty is assigned to this area
+            if (! $area->members()->where('user_id', $user->id)->exists()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not assigned to this area.',
+                ], 403);
+            }
+
+            // Store uploaded files
+            $storedFiles = [];
+            if ($request->hasFile('files')) {
+                foreach ($request->file('files') as $file) {
+                    $path = $file->store("accreditation/area-{$area->id}/submissions", 'private');
+                    $storedFiles[] = [
+                        'original_name' => $file->getClientOriginalName(),
+                        'file_path' => $path,
+                        'file_size' => $file->getSize(),
+                        'uploaded_by' => $user->id,
+                        'uploaded_at' => now(),
+                    ];
+                }
+            }
+
+            // Create submission record
+            $submission = DB::table('area_submissions')->insert([
+                'area_id' => $area->id,
+                'user_id' => $user->id,
+                'notes' => $validated['notes'],
+                'status' => 'Pending Review',
+                'submitted_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            // Store individual files
+            foreach ($storedFiles as $file) {
+                DB::table('area_submission_files')->insert($file);
+            }
+
+            // Notify program chair
+            $programChair = $area->cycle->program->chairUser;
+            if ($programChair) {
+                $programChair->notify(new \App\Notifications\FacultySubmissionNotification([
+                    'faculty_name' => $user->name,
+                    'area_name' => $area->name,
+                    'program_name' => $area->cycle->program->name,
+                    'file_count' => count($storedFiles),
+                    'submitted_at' => now()->toDateTimeString(),
+                ]));
+            }
+
+            // Log activity
+            \App\Models\AuditLog::create([
+                'user_id' => $user->id,
+                'action' => 'submit_area_files',
+                'model' => 'AccreditationArea',
+                'model_id' => $area->id,
+                'details' => [
+                    'area_name' => $area->name,
+                    'file_count' => count($storedFiles),
+                    'notes' => substr($validated['notes'] ?? '', 0, 100),
+                ],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Files submitted successfully. Program Chair will review shortly.',
+                'data' => [
+                    'area_id' => $area->id,
+                    'submitted_at' => now()->toIso8601String(),
+                    'file_count' => count($storedFiles),
+                    'status' => 'Pending Review',
+                ],
+                'submission' => true,
+            ], 200);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to submit area files', [
+                'error' => $e->getMessage(),
+                'user_id' => $user->id,
+                'area_id' => $validated['area_id'] ?? null,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to submit files. Please try again.',
+            ], 500);
+        }
+    }
+
+    private function assertCanViewCycle($user, AccreditationCycle $cycle): void
+    {
+        if (! $user || $user->isVPAA() || $user->isDean()) {
+            return;
+        }
+
+        if ($user->isProgramChair() && (int) $cycle->program()->value('chair_id') === (int) $user->id) {
+            return;
+        }
+
+        if ($user->isAreaIncharge() && $cycle->areas()->where('chair_id', $user->id)->exists()) {
+            return;
+        }
+
+        abort(403, 'You are not authorized to view this accreditation area.');
+    }
+
+    private function assertCanManageCycle($user, AccreditationCycle $cycle): void
+    {
+        if (! $user || ! $user->isProgramChair() || (int) $cycle->program()->value('chair_id') !== (int) $user->id) {
+            abort(403, 'Only the assigned Program Chair may manage this accreditation area.');
+        }
     }
 }

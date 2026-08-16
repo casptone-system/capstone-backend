@@ -27,6 +27,7 @@ class AccreditationArea extends Model
      */
     protected $fillable = [
         'cycle_id',
+        'instrument_id',
         'name',
         'description',
         'chair_id',
@@ -51,6 +52,16 @@ class AccreditationArea extends Model
     public function cycle(): BelongsTo
     {
         return $this->belongsTo(AccreditationCycle::class, 'cycle_id');
+    }
+
+    public function instrument(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationInstrument::class, 'instrument_id');
+    }
+
+    public function requirements(): HasMany
+    {
+        return $this->hasMany(AccreditationRequirement::class, 'area_id');
     }
 
     /**

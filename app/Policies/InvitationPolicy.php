@@ -57,7 +57,7 @@ class InvitationPolicy
             return true;
         }
 
-        if ($invitation->status !== 'pending') {
+        if (! in_array($invitation->status, ['pending', 'requested'], true)) {
             return false;
         }
 
@@ -70,6 +70,27 @@ class InvitationPolicy
         }
 
         return true;
+    }
+
+    public function approve(User $user, Invitation $invitation): bool
+    {
+        if ($user->isSuperAdmin()) {
+            return true;
+        }
+
+        if ($invitation->status !== 'requested' || ! $invitation->program) {
+            return false;
+        }
+
+        if ($user->isDean()) {
+            return $invitation->program->college_id === $user->getEffectiveCollegeId();
+        }
+
+        if ($user->isProgramChair()) {
+            return $invitation->program->id === $user->getEffectiveProgramId();
+        }
+
+        return false;
     }
 
     protected function resolveProgram(mixed $input): ?Program

@@ -16,6 +16,14 @@ class RoleStorageFolder extends Model
         'parent_id',
         'role',
         'name',
+        'is_favorite',
+        'status',
+        'deleted_at',
+    ];
+
+    protected $casts = [
+        'is_favorite' => 'boolean',
+        'deleted_at' => 'datetime',
     ];
 
     public function user(): BelongsTo
