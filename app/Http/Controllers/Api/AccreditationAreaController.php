@@ -138,20 +138,46 @@ class AccreditationAreaController extends Controller
     }
 
     /**
+     * Get all members of the accreditation area.
+     */
+    public function getMembers(Request $request, AccreditationArea $accreditationArea)
+    {
+        $this->assertCanViewCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $members = $accreditationArea->members()->with('user')->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Members retrieved successfully.',
+            'data' => AreaMemberResource::collection($members),
+        ], 200);
+    }
+
+    /**
      * Add a member to the accreditation area.
      */
     public function addMember(Request $request, AccreditationArea $accreditationArea)
     {
         $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+
+        $userId = $request->input('user_id', $request->input('faculty_id'));
         $validated = $request->validate([
-            'user_id' => ['required', 'exists:users,id'],
+            'user_id' => ['sometimes', 'exists:users,id'],
+            'faculty_id' => ['sometimes', 'exists:users,id'],
             'role' => ['nullable', 'string', 'max:255'],
             'deadline' => ['nullable', 'date'],
             'instructions' => ['nullable', 'string'],
         ]);
 
+        $resolvedUserId = $validated['user_id'] ?? $validated['faculty_id'] ?? $userId;
+        if (empty($resolvedUserId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The faculty is required.',
+            ], 422);
+        }
+
         $member = $accreditationArea->members()->create([
-            'user_id' => $validated['user_id'],
+            'user_id' => $resolvedUserId,
             'role' => $validated['role'] ?? 'member',
         ]);
 

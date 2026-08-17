@@ -14,6 +14,7 @@ class RolePermissionSeeder extends Seeder
 
         $permissions = [
             'view dashboard',
+            'access-college-dashboard',
             'manage users',
             'manage teams',
             'invite faculty',
@@ -64,8 +65,12 @@ class RolePermissionSeeder extends Seeder
             ],
             'Dean' => [
                 'view dashboard',
+                'access-college-dashboard',
+                'manage reviews',
                 'approve reviews',
                 'review reports',
+                'manage teams',
+                'manage documents',
             ],
             'Program Chair' => [
                 'view dashboard',

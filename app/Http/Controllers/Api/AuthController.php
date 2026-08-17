@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
 
 class AuthController extends Controller
 {
@@ -389,6 +390,126 @@ class AuthController extends Controller
             || str_contains($password, 'password');
     }
 
+    private function assignDefaultPermissionsToRole(Role $role, string $roleNameLower): void
+    {
+        // Define default permissions for each role
+        $rolePermissions = [
+            'faculty' => [
+                'view dashboard',
+                'upload documents',
+                'submit reviews',
+            ],
+            'dean' => [
+                'view dashboard',
+                'access-college-dashboard',
+                'manage reviews',
+                'approve reviews',
+                'review reports',
+                'manage teams',
+                'manage documents',
+            ],
+            'program chair' => [
+                'view dashboard',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'review reports',
+                'manage reviews',
+                'request revisions',
+            ],
+            'program-chair' => [
+                'view dashboard',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'review reports',
+                'manage reviews',
+                'request revisions',
+            ],
+            'area in-charge' => [
+                'view dashboard',
+                'manage reviews',
+                'request revisions',
+                'review reports',
+            ],
+            'area-in-charge' => [
+                'view dashboard',
+                'manage reviews',
+                'request revisions',
+                'review reports',
+            ],
+            'qa' => [
+                'view dashboard',
+                'review reports',
+                'view audit logs',
+            ],
+            'vpaa' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'vpaa/di' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'super administrator' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+            'super admin' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+            'superadmin' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+        ];
+
+        $permissionNames = $rolePermissions[$roleNameLower] ?? $rolePermissions['faculty'];
+
+        foreach ($permissionNames as $permissionName) {
+            $permission = Permission::firstOrCreate(['name' => $permissionName, 'guard_name' => 'web']);
+            $role->givePermissionTo($permission);
+        }
+    }
+
     public function resendVerificationEmail(Request $request)
     {
         $validated = $request->validate([
@@ -609,8 +730,11 @@ class AuthController extends Controller
             }
 
             $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
-            Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-            $user->assignRole($roleName);
+            $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+            $user->assignRole($roleModel);
+            
+            // Assign default permissions to the role if it's newly created
+            $this->assignDefaultPermissionsToRole($roleModel, $roleName);
 
             try {
                 $user->sendEmailVerificationNotification();
@@ -653,8 +777,9 @@ class AuthController extends Controller
         }
 
         $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
-        Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-        $user->assignRole($roleName);
+        $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+        // Ensure permissions are assigned (in case role was just created)
+        $this->assignDefaultPermissionsToRole($roleModel, $roleName);
 
         $token = null;
         if ($creator && $isSuperAdmin) {

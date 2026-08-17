@@ -25,6 +25,10 @@ class Program extends Model
         'chair_id',
         'accreditation_status',
         'compliance_score',
+        'accreditation_level',
+        'accreditation_phase',
+        'scheduled_visit',
+        'valid_until',
     ];
 
     /**
@@ -36,6 +40,8 @@ class Program extends Model
     {
         return [
             'compliance_score' => 'integer',
+            'scheduled_visit' => 'date',
+            'valid_until' => 'date',
         ];
     }
 

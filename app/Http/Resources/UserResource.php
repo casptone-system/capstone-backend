@@ -19,6 +19,18 @@ class UserResource extends JsonResource
         }
 
         $college = $this->college;
+        $program = $this->program;
+        $team = $this->team;
+
+        // Compute department from available data
+        $department = null;
+        if ($college) {
+            $department = $college->name;
+        } elseif ($program) {
+            $department = $program->name;
+        } elseif ($team) {
+            $department = $team->name;
+        }
 
         return [
             'id' => $this->id,
@@ -36,6 +48,7 @@ class UserResource extends JsonResource
             'role_slug' => $roleSlug,
             'roles' => $roles->values(),
             'permissions' => $this->getPermissionNames(),
+            'department' => $department,
             'college_id' => $this->college_id ?? null,
             'collegeId' => $this->college_id ?? null,
             'college' => $college ? [

@@ -7,6 +7,7 @@ use App\Http\Resources\UserResource;
 use App\Models\AuditLog;
 use App\Models\College;
 use App\Models\Program;
+use App\Models\ProgramMember;
 use App\Models\Team;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -115,6 +116,186 @@ class UserController extends Controller
         return null;
     }
 
+    private function createWelcomeTaskForUser(User $user, User $admin): void
+    {
+        try {
+            $role = $user->roles->first()?->name ?? 'faculty';
+            
+            $title = match (strtolower($role)) {
+                'faculty' => 'Complete Your Faculty Profile',
+                'program chair' => 'Program Chair Onboarding Setup',
+                'dean' => 'Dean Dashboard Overview',
+                'area in-charge' => 'Area In-Charge Setup',
+                'area-in-charge' => 'Area In-Charge Setup',
+                'qa' => 'QA Dashboard Orientation',
+                'vpaa' => 'VPAA Portal Setup',
+                'vpaa/di' => 'VPAA Portal Setup',
+                'accreditor' => 'Accreditor Access Guide',
+                'super administrator' => 'Administrator Portal Overview',
+                'super admin' => 'Administrator Portal Overview',
+                'superadmin' => 'Administrator Portal Overview',
+                default => 'Welcome to the System',
+            };
+
+            $description = match (strtolower($role)) {
+                'faculty' => "Welcome {$user->first_name}! Please complete your faculty profile with your contact information and qualifications. This helps us keep your records up to date.",
+                
+                'program chair' => "Welcome {$user->first_name}! As a Program Chair, please review the accreditation dashboard, familiarize yourself with the accreditation structure for your program, and contact your dean if you have any questions.",
+                
+                'dean' => "Welcome {$user->first_name}! Your dean dashboard is now ready. Please review the college structure, connect with your program chairs, and set up your college profile to get started.",
+                
+                'area in-charge', 'area-in-charge' => "Welcome {$user->first_name}! You are now assigned as an Area In-Charge. Please review the accreditation areas assigned to you and familiarize yourself with the review process.",
+                
+                'qa' => "Welcome {$user->first_name}! As a Quality Assurance coordinator, you now have access to monitor all accreditation activities. Please review the QA dashboard to get started.",
+                
+                'vpaa', 'vpaa/di' => "Welcome {$user->first_name}! As VPAA, you have full oversight of all accreditation cycles. Please review the academic administration portal and set up accreditation parameters.",
+                
+                'accreditor' => "Welcome {$user->first_name}! You now have access to review accreditation submissions. Please review the accreditor guide and familiarize yourself with the evaluation process.",
+                
+                'super administrator', 'super admin', 'superadmin' => "Welcome {$user->first_name}! As a System Administrator, you have full access to all system features. Please review the administration portal for configuration options.",
+                
+                default => "Welcome {$user->first_name}! Your account has been created successfully. Please explore the system and familiarize yourself with the available features.",
+            };
+
+            \App\Models\TaskNotification::create([
+                'assigned_by_id' => $admin->id,
+                'assigned_to_id' => $user->id,
+                'title' => $title,
+                'description' => $description,
+                'type' => 'onboarding',
+                'is_welcome_task' => true,
+                'badge_clear_hours' => 72, // 3 days for welcome tasks
+                'status' => 'pending',
+            ]);
+        } catch (\Exception $e) {
+            // Log but don't fail the user creation if task creation fails
+            \Log::warning("Failed to create welcome task for user {$user->id}: " . $e->getMessage());
+        }
+    }
+
+    private function ensureRoleHasPermissions(Role $role, string $roleNameLower): void
+    {
+        // Define default permissions for each role
+        $rolePermissions = [
+            'faculty' => [
+                'view dashboard',
+                'upload documents',
+                'submit reviews',
+            ],
+            'dean' => [
+                'view dashboard',
+                'access-college-dashboard',
+                'approve reviews',
+                'review reports',
+            ],
+            'program chair' => [
+                'view dashboard',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'review reports',
+                'manage reviews',
+                'request revisions',
+            ],
+            'program-chair' => [
+                'view dashboard',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'review reports',
+                'manage reviews',
+                'request revisions',
+            ],
+            'area in-charge' => [
+                'view dashboard',
+                'manage reviews',
+                'request revisions',
+                'review reports',
+            ],
+            'area-in-charge' => [
+                'view dashboard',
+                'manage reviews',
+                'request revisions',
+                'review reports',
+            ],
+            'qa' => [
+                'view dashboard',
+                'review reports',
+                'view audit logs',
+            ],
+            'vpaa' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'vpaa/di' => [
+                'view dashboard',
+                'approve reviews',
+                'review reports',
+                'view audit logs',
+            ],
+            'super administrator' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+            'super admin' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+            'superadmin' => [
+                'view dashboard',
+                'manage users',
+                'manage teams',
+                'invite faculty',
+                'assign chairs',
+                'manage documents',
+                'submit reviews',
+                'manage reviews',
+                'approve reviews',
+                'request revisions',
+                'review reports',
+                'view audit logs',
+                'view login history',
+            ],
+        ];
+
+        $permissionNames = $rolePermissions[$roleNameLower] ?? $rolePermissions['faculty'];
+
+        // Only assign permissions if the role doesn't already have any
+        // This prevents overwriting manually assigned permissions
+        $existingPermissions = $role->permissions()->pluck('name')->toArray();
+        
+        foreach ($permissionNames as $permissionName) {
+            if (!in_array($permissionName, $existingPermissions)) {
+                $permission = Permission::firstOrCreate(['name' => $permissionName, 'guard_name' => 'web']);
+                $role->givePermissionTo($permission);
+            }
+        }
+    }
+
     public function dashboard(Request $request)
     {
         $actor = $this->ensureSuperAdmin($request);
@@ -142,7 +323,7 @@ class UserController extends Controller
         $actor = $this->ensureSuperAdmin($request);
         $user = $request->user();
 
-        if (! $actor && (! $user || ! $user->hasRole('Dean'))) {
+        if (! $actor && (! $user || (! $user->hasRole('Dean') && ! $user->isProgramChair()))) {
             return response()->json(['success' => false, 'message' => 'You do not have permission to view users.'], 403);
         }
 
@@ -154,6 +335,22 @@ class UserController extends Controller
                 $query->where(function ($q) use ($collegeId) {
                     $q->where('college_id', $collegeId)
                         ->orWhereIn('program_id', Program::where('college_id', $collegeId)->pluck('id'));
+                });
+            }
+        }
+
+        if ($user && $user->isProgramChair()) {
+            $programId = $user->getEffectiveProgramId();
+            if (! $programId) {
+                $query->whereRaw('0 = 1');
+            } else {
+                $query->where(function ($q) use ($programId) {
+                    $q->where('program_id', $programId)
+                        ->orWhereExists(function ($sub) use ($programId) {
+                            $sub->from('program_members')
+                                ->whereColumn('program_members.user_id', 'users.id')
+                                ->where('program_members.program_id', $programId);
+                        });
                 });
             }
         }
@@ -194,6 +391,11 @@ class UserController extends Controller
             'program_id' => ['nullable', 'integer', 'exists:programs,id'],
             'team_id' => ['nullable', 'integer', 'exists:teams,id'],
             'status' => ['nullable', 'string'],
+            'send_welcome_task' => ['nullable', 'boolean'],
+            'additional_tasks' => ['nullable', 'array'],
+            'additional_tasks.*.title' => ['string', 'max:255'],
+            'additional_tasks.*.description' => ['nullable', 'string'],
+            'additional_tasks.*.type' => ['in:document_upload,review,approval,assignment,other,onboarding'],
         ]);
 
         if ($response = $this->ensureDeanHasValidCollege($validated)) {
@@ -225,11 +427,33 @@ class UserController extends Controller
             $roleName = str_replace('_', ' ', $validated['role']);
             $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
             $user->assignRole($role);
+            
+            // Assign default permissions to the role if newly created
+            $this->ensureRoleHasPermissions($role, strtolower($roleName));
 
             if (strtolower($validated['role']) === 'dean') {
                 $college = $user->college;
                 if ($college) {
                     $user->notify(new \App\Notifications\DeanAssignedNotification($college, $actor, $user));
+                }
+            }
+
+            // Create welcome task if requested
+            if ($validated['send_welcome_task'] ?? true) {
+                $this->createWelcomeTaskForUser($user, $actor);
+            }
+
+            // Create additional tasks if provided
+            if (!empty($validated['additional_tasks'])) {
+                foreach ($validated['additional_tasks'] as $taskData) {
+                    \App\Models\TaskNotification::create([
+                        'assigned_by_id' => $actor->id,
+                        'assigned_to_id' => $user->id,
+                        'title' => $taskData['title'],
+                        'description' => $taskData['description'] ?? null,
+                        'type' => $taskData['type'] ?? 'assignment',
+                        'status' => 'pending',
+                    ]);
                 }
             }
 
@@ -349,8 +573,35 @@ class UserController extends Controller
             abort(403, 'Only a Program Chair can view program faculty.');
         }
 
-        $faculty = User::role('Faculty')
-            ->where('program_id', $user->getEffectiveProgramId())
+        $programId = $user->getEffectiveProgramId();
+        if (! $programId) {
+            $programId = ProgramMember::where('user_id', $user->id)
+                ->orderByDesc('joined_at')
+                ->value('program_id');
+        }
+
+        if (! $programId) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+
+        $faculty = User::query()
+            ->where(function ($q) use ($programId) {
+                $q->where('users.program_id', $programId)
+                    ->orWhereExists(function ($sub) use ($programId) {
+                        $sub->from('program_members')
+                            ->whereColumn('program_members.user_id', 'users.id')
+                            ->where('program_members.program_id', $programId);
+                    });
+            })
+            ->where(function ($q) {
+                $q->whereHas('roles', function ($roleQuery) {
+                    $roleQuery->whereRaw('LOWER(name) = ?', ['faculty']);
+                })->orWhereExists(function ($sub) {
+                    $sub->from('program_members as pm')
+                        ->whereColumn('pm.user_id', 'users.id')
+                        ->whereRaw('LOWER(COALESCE(pm.role, "")) = ?', ['faculty']);
+                });
+            })
             ->orderBy('name')
             ->get(['id', 'name', 'email', 'profile_photo', 'program_id']);
 

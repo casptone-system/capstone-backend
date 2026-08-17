@@ -75,6 +75,11 @@ class ProgramPolicy
             return $program->college_id === $user->getEffectiveCollegeId();
         }
 
+        // Allow program chair to update their own program's accreditation setup
+        if ($user->isProgramChair()) {
+            return $program->chair_id === $user->id;
+        }
+
         return false;
     }
 

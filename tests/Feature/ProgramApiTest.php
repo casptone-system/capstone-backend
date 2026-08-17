@@ -90,6 +90,41 @@ class ProgramApiTest extends TestCase
         ]);
     }
 
+    public function test_program_chair_sees_program_members_that_are_registered_as_faculty_even_without_exact_role_name(): void
+    {
+        $chair = User::factory()->create(['name' => 'Chair User', 'email' => 'chair-faculty@example.com']);
+        Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
+        $chair->assignRole('Program Chair');
+
+        $college = \App\Models\College::factory()->create();
+        $program = Program::factory()->create(['college_id' => $college->id]);
+        $chair->program_id = $program->id;
+        $chair->save();
+
+        $faculty = User::factory()->create([
+            'name' => 'Registered Faculty',
+            'email' => 'registered-faculty@example.com',
+            'program_id' => $program->id,
+            'college_id' => $college->id,
+        ]);
+
+        ProgramMember::create([
+            'program_id' => $program->id,
+            'user_id' => $faculty->id,
+            'role' => 'faculty',
+            'joined_at' => now(),
+            'invited_by' => $chair->id,
+        ]);
+
+        $response = $this->actingAs($chair, 'sanctum')->getJson('/api/program-faculty');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('success', true)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $faculty->id)
+            ->assertJsonPath('data.0.name', 'Registered Faculty');
+    }
+
     public function test_program_chair_endpoint_is_accessible_to_deans_and_superadmins(): void
     {
         $chairA = User::factory()->create(['name' => 'Chair A', 'email' => 'chair-a@example.com']);

@@ -247,6 +247,26 @@ class AccreditationAreaApiTest extends TestCase
         ]);
     }
 
+    public function test_add_member_accepts_faculty_id_alias(): void
+    {
+        $memberUser = User::factory()->create();
+
+        $response = $this->postJson('/api/accreditation-areas/' . $this->area->id . '/members', [
+            'faculty_id' => $memberUser->id,
+            'role' => 'member',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.userId', $memberUser->id);
+
+        $this->assertDatabaseHas('area_members', [
+            'area_id' => $this->area->id,
+            'user_id' => $memberUser->id,
+            'role' => 'member',
+        ]);
+    }
+
     public function test_add_member_validates_required_fields(): void
     {
         $response = $this->postJson('/api/accreditation-areas/' . $this->area->id . '/members', []);

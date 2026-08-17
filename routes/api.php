@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\RoleStorageController;
 use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\TaskNotificationController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -64,6 +65,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('accreditation-areas/{accreditationArea}/assign-chair', [AccreditationAreaController::class, 'assignChair']);
     Route::post('accreditation-areas/{accreditationArea}/assign-in-charge', [AccreditationStructureController::class, 'assignInCharge']);
     Route::get('accreditation-areas/{accreditationArea}/requirements', [AccreditationStructureController::class, 'requirements']);
+    Route::get('accreditation-areas/{accreditationArea}/members', [AccreditationAreaController::class, 'getMembers']);
     Route::post('accreditation-areas/{accreditationArea}/members', [AccreditationAreaController::class, 'addMember']);
     Route::delete('accreditation-areas/{accreditationArea}/members/{member}', [AccreditationAreaController::class, 'removeMember']);
     Route::get('accreditation-areas/{accreditationArea}/progress', [AccreditationAreaController::class, 'progress']);
@@ -145,12 +147,27 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);
 
-    Route::get('dean/dashboard', [DeanController::class, 'dashboard']);
+    Route::get('dean/dashboard', [DeanController::class, 'dashboard']); 
     Route::get('dean/programs', [DeanController::class, 'programs']);
     Route::get('dean/programs/{programId}/chair', [DeanController::class, 'getProgramChair']);
     Route::get('dean/documents', [DeanController::class, 'documents']);
     Route::get('dean/review-queue', [DeanController::class, 'reviewQueue']);
     Route::post('dean/notify-program-chair', [DeanController::class, 'notifyProgramChair']);
+
+    // Task Notifications (Dean assigns tasks to Program Chairs with badges)
+    Route::get('task-notifications/badge-count', [TaskNotificationController::class, 'getBadgeCount']);
+    Route::get('task-notifications/pending', [TaskNotificationController::class, 'pending']);
+    Route::post('task-notifications', [TaskNotificationController::class, 'store']); // Dean assigns task
+    Route::post('task-notifications/{taskNotification}/mark-viewed', [TaskNotificationController::class, 'markAsViewed']);
+    Route::post('task-notifications/{taskNotification}/mark-completed', [TaskNotificationController::class, 'markAsCompleted']);
+    Route::post('task-notifications/{taskNotification}/dismiss', [TaskNotificationController::class, 'dismiss']);
+    Route::apiResource('task-notifications', TaskNotificationController::class)->only(['index', 'show']);
+
+    // Task Notification Files (Instruments & documents)
+    Route::post('task-notifications/{taskNotification}/files', [TaskNotificationController::class, 'uploadFile']);
+    Route::get('task-notifications/{taskNotification}/files', [TaskNotificationController::class, 'getFiles']);
+    Route::get('task-notifications/{taskNotification}/files/{file}/download', [TaskNotificationController::class, 'downloadFile']);
+    Route::post('task-notifications/{taskNotification}/files/{file}/forward', [TaskNotificationController::class, 'forwardFile']);
 
     Route::get('users', [UserController::class, 'index']);
     Route::get('program-chairs', [UserController::class, 'programChairs']);

@@ -203,6 +203,31 @@ class FacultyTaskAssignmentTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_program_chair_can_assign_task_notification_to_faculty(): void
+    {
+        $this->actingAs($this->programChair, 'sanctum')
+            ->postJson('/api/task-notifications', [
+                'assigned_to_id' => $this->faculty->id,
+                'title' => 'Upload your evidence for Faculty Development',
+                'description' => 'Please upload the required evidence and complete the task.',
+                'type' => 'document_upload',
+                'related_id' => $this->area->id,
+                'related_model' => 'accreditation_area',
+                'badge_clear_hours' => 72,
+            ])
+            ->assertStatus(201)
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.assigned_to_id', $this->faculty->id)
+            ->assertJsonPath('data.type', 'document_upload');
+
+        $this->assertDatabaseHas('task_notifications', [
+            'assigned_by_id' => $this->programChair->id,
+            'assigned_to_id' => $this->faculty->id,
+            'type' => 'document_upload',
+            'status' => 'pending',
+        ]);
+    }
+
     public function test_faculty_receives_notification_on_task_assignment(): void
     {
         // Program Chair assigns task

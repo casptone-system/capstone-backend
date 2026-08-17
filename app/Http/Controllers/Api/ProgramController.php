@@ -286,6 +286,10 @@ class ProgramController extends Controller
             'chair_id' => ['nullable', 'integer', 'exists:users,id'],
             'accreditation_status' => ['nullable', 'in:compliant,at-risk,non-compliant'],
             'compliance_score' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'accreditation_level' => ['nullable', 'string', 'max:255'],
+            'accreditation_phase' => ['nullable', 'string', 'max:255'],
+            'scheduled_visit' => ['nullable', 'date'],
+            'valid_until' => ['nullable', 'date'],
         ];
 
         if ($request->user()?->isDean()) {

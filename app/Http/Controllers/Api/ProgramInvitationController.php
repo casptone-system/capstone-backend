@@ -43,6 +43,7 @@ class ProgramInvitationController extends Controller
             'email' => ['nullable', 'email'],
             'role' => ['nullable', 'string'],
             'expires_in_hours' => ['nullable', 'integer', 'min:1', 'max:168'],
+            'send_welcome_task' => ['nullable', 'boolean'],
         ]);
 
         $token = bin2hex(random_bytes(24));
@@ -54,6 +55,7 @@ class ProgramInvitationController extends Controller
                 'role' => $validated['role'] ?? null,
                 'token' => $token,
                 'invited_by' => $user->id,
+                'send_welcome_task' => $validated['send_welcome_task'] ?? true,
                 'expires_at' => isset($validated['expires_in_hours']) ? now()->addHours($validated['expires_in_hours']) : now()->addDays(3),
                 'status' => 'pending',
             ]);
@@ -222,6 +224,17 @@ class ProgramInvitationController extends Controller
             $inv->status = 'accepted';
             $inv->used_by = $user->id;
             $inv->accepted_at = now();
+            
+            // Create welcome task if enabled for this invitation
+            if ($inv->send_welcome_task) {
+                $inviter = $inv->inviter;
+                try {
+                    $inv->createWelcomeTask($user, $inviter);
+                } catch (\Exception $e) {
+                    \Log::warning("Failed to create welcome task for invitation {$inv->id}: " . $e->getMessage());
+                }
+            }
+            
             $inv->save();
             $inv->delete();
 
