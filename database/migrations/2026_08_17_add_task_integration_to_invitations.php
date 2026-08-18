@@ -12,19 +12,29 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('invitations', function (Blueprint $table) {
-            // Track if a welcome task should be sent
-            $table->boolean('send_welcome_task')->default(true)->after('status');
-            // Store related task notification
-            $table->foreignId('welcome_task_id')->nullable()->after('send_welcome_task')
-                ->constrained('task_notifications')->nullOnDelete();
+            if (!Schema::hasColumn('invitations', 'send_welcome_task')) {
+                // Track if a welcome task should be sent
+                $table->boolean('send_welcome_task')->default(true)->after('status');
+            }
+
+            if (!Schema::hasColumn('invitations', 'welcome_task_id')) {
+                // Store related task notification
+                $table->foreignId('welcome_task_id')->nullable()->after('send_welcome_task')
+                    ->constrained('task_notifications')->nullOnDelete();
+            }
         });
 
         Schema::table('task_notifications', function (Blueprint $table) {
-            // Track if this is a welcome/onboarding task
-            $table->boolean('is_welcome_task')->default(false)->after('type');
-            // Link to invitation if created from one
-            $table->foreignId('invitation_id')->nullable()->after('is_welcome_task')
-                ->constrained('invitations')->nullOnDelete();
+            if (!Schema::hasColumn('task_notifications', 'is_welcome_task')) {
+                // Track if this is a welcome/onboarding task
+                $table->boolean('is_welcome_task')->default(false)->after('type');
+            }
+
+            if (!Schema::hasColumn('task_notifications', 'invitation_id')) {
+                // Link to invitation if created from one
+                $table->foreignId('invitation_id')->nullable()->after('is_welcome_task')
+                    ->constrained('invitations')->nullOnDelete();
+            }
         });
     }
 

@@ -211,7 +211,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
         'sessions'
     ]);
 
-    // Join team using invitation code
+    // Join team using invitation coade
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
     // Teams management (Program Chairs / Admins can create teams and codes)
     Route::apiResource('teams', \App\Http\Controllers\Api\TeamController::class)->only(['index', 'store', 'show']);
