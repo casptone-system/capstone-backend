@@ -71,107 +71,57 @@ class AuthController extends Controller
         ]);
     }
 
-    if (! $user->hasVerifiedEmail()) {
-        throw ValidationException::withMessages([
-            'email' => ['Please verify your email address before signing in.'],
-        ]);
-    }
+    // DISABLED: Email verification check — temporarily off for dev, see [2026-08-18]
+    // if (! $user->hasVerifiedEmail()) {
+    //     throw ValidationException::withMessages([
+    //         'email' => ['Please verify your email address before signing in.'],
+    //     ]);
+    // }
 
-    // IP-based login throttle: limit attempts per IP per minute
-    $ip = $request->ip() ?? 'unknown';
-    $ipKey = 'login_ip_attempts:' . $ip;
-    $ipCount = (int) Cache::get($ipKey, 0);
-    $ipLimit = $this->getLoginIpLimitPerMinute();
-    if ($ipCount >= $ipLimit) {
-        throw ValidationException::withMessages([
-            'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
-        ]);
-    }
-    Cache::put($ipKey, $ipCount + 1, 60);
+    // DISABLED: Duplicate IP-based login throttle check (first check already done above) — keeping removal for dev, see [2026-08-18]
+    // $ip = $request->ip() ?? 'unknown';
+    // $ipKey = 'login_ip_attempts:' . $ip;
+    // $ipCount = (int) Cache::get($ipKey, 0);
+    // $ipLimit = $this->getLoginIpLimitPerMinute();
+    // if ($ipCount >= $ipLimit) {
+    //     throw ValidationException::withMessages([
+    //         'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
+    //     ]);
+    // }
+    // Cache::put($ipKey, $ipCount + 1, 60);
 
-    $challenge = $this->createLoginChallenge($user);
+    // DISABLED: 2FA code generation & sending — temporarily off for dev, see [2026-08-18]
+    // $challenge = $this->createLoginChallenge($user);
+
+    // REPLACEMENT: Return auth token immediately after password validation (2FA skipped)
+    $token = $user->createToken('api-token')->plainTextToken;
 
     return response()->json([
         'success' => true,
-        'message' => 'A verification code has been sent to your email address. Enter the code to complete sign in.',
+        'message' => 'Authenticated successfully.',
         'data' => [
-            'challenge_token' => $challenge['challenge_token'],
-            'expires_in' => $challenge['expires_in'],
-            'email' => $user->email,
+            'token' => $token,
+            'user' => new UserResource($user),
         ],
     ], 200);
 }
 
     public function verifyTwoFactor(Request $request)
     {
-        $validated = $request->validate([
-            'challenge_token' => ['required', 'string'],
-            'code' => ['required', 'string', 'size:6'],
-        ]);
+        // DISABLED: 2FA verification — backend skips code generation, see [2026-08-18]
+        // Original method body commented out for restoration:
+        // $validated = $request->validate([
+        //     'challenge_token' => ['required', 'string'],
+        //     'code' => ['required', 'string', 'size:6'],
+        // ]);
+        // ... validation logic ...
+        // $token = $user->createToken('api-token')->plainTextToken;
 
-        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
-        $challenge = Cache::get($cacheKey);
-
-        if (! $challenge) {
-            throw ValidationException::withMessages([
-                'challenge_token' => ['The login verification token is invalid or has expired. Please try signing in again.'],
-            ]);
-        }
-
-        if ((int) ($challenge['attempts'] ?? 0) >= 5) {
-            Cache::forget($cacheKey);
-            throw ValidationException::withMessages([
-                'code' => ['Too many invalid attempts. Please restart the login process.'],
-            ]);
-        }
-
-        $codeMatch = hash_equals($challenge['code_hash'], hash('sha256', $validated['code']));
-        if (! $codeMatch) {
-            $challenge['attempts'] = ((int) ($challenge['attempts'] ?? 0)) + 1;
-            Cache::put($cacheKey, $challenge, $this->getLoginChallengeTtl());
-
-            throw ValidationException::withMessages([
-                'code' => ['The verification code is incorrect. Please try again.'],
-            ]);
-        }
-
-        $user = User::find($challenge['user_id']);
-        Cache::forget($cacheKey);
-
-        if (! $user) {
-            throw ValidationException::withMessages([
-                'challenge_token' => ['The login verification token is invalid. Please try again.'],
-            ]);
-        }
-
-        if (isset($user->status) && $user->status === 'inactive') {
-            throw ValidationException::withMessages([
-                'email' => ['This account is inactive.'],
-            ]);
-        }
-
-        if (isset($user->status) && $user->status === 'locked') {
-            throw ValidationException::withMessages([
-                'email' => ['This account is locked. Please contact an administrator.'],
-            ]);
-        }
-
-        if (! $user->hasVerifiedEmail()) {
-            throw ValidationException::withMessages([
-                'email' => ['Please verify your email address before signing in.'],
-            ]);
-        }
-
-        $token = $user->createToken('api-token')->plainTextToken;
-
+        // Return graceful no-op response
         return response()->json([
-            'success' => true,
-            'message' => 'Authenticated successfully.',
-            'data' => [
-                'token' => $token,
-                'user' => new UserResource($user),
-            ],
-        ], 200);
+            'success' => false,
+            'message' => '2FA verification is skipped for development. Please use the login endpoint which now returns a token directly.',
+        ], 400);
     }
 
     private function createLoginChallenge(User $user): array
@@ -229,91 +179,14 @@ class AuthController extends Controller
 
     public function resendTwoFactor(Request $request)
     {
-        $validated = $request->validate([
-            'challenge_token' => ['required', 'string'],
-        ]);
-
-        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
-        $challenge = Cache::get($cacheKey);
-
-        if (! $challenge) {
-            return response()->json([
-                'success' => false,
-                'message' => 'The login verification token is invalid or has expired. Please sign in again.',
-            ], 422);
-        }
-
-        $resendCount = (int) ($challenge['resend_count'] ?? 0);
-        Log::debug('resendTwoFactor state', ['challenge_key' => $cacheKey, 'resend_count' => $resendCount, 'last_resend_at' => $challenge['last_resend_at'] ?? null]);
-        if ($resendCount >= 3) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You have reached the maximum number of resends. Please sign in again.',
-            ], 429);
-        }
-
-        // Enforce a short cooldown between resends (per challenge)
-        $now = now()->getTimestamp();
-        $lastResend = isset($challenge['last_resend_at']) ? (int) $challenge['last_resend_at'] : 0;
-        // Defensive: if lastResend is in the future (clock skew), ignore it
-        if ($lastResend > $now) {
-            $lastResend = 0;
-        }
-
-        // Test helper: allow advancing perceived last_resend_at via header in unit tests
-        if (app()?->runningUnitTests() && $request->headers->has('X-Test-Advance-Seconds')) {
-            $advance = (int) $request->header('X-Test-Advance-Seconds');
-            if ($advance > 0) {
-                $lastResend = $lastResend - $advance;
-            }
-        }
-        $cooldown = $this->getResendCooldownSeconds();
-        // Allow the initial resend even if a last_resend_at exists unexpectedly.
-        if ($resendCount > 0 && $lastResend && ($now - $lastResend) < $cooldown) {
-            $remaining = $cooldown - ($now - $lastResend);
-            Log::debug('resendTwoFactor blocked', ['reason' => 'cooldown', 'remaining' => $remaining, 'challenge' => $cacheKey]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Please wait ' . $remaining . ' seconds before requesting another code.',
-            ], 429);
-        }
-
-        // IP-based global throttle: limit number of resend requests per IP per minute
-        $ip = $request->ip() ?? 'unknown'
-        ;
-        $ipKey = 'resend_2fa_ip:' . $ip;
-        $ipCount = (int) Cache::get($ipKey, 0);
-        $ipLimit = $this->getResendIpLimitPerMinute();
-        Log::debug('resendTwoFactor ip state', ['ip' => $ip, 'ipKey' => $ipKey, 'ipCount' => $ipCount, 'ipLimit' => $ipLimit]);
-        if ($ipCount >= $ipLimit) {
-            Log::debug('resendTwoFactor blocked', ['reason' => 'ip_limit', 'ip' => $ip, 'count' => $ipCount]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many resend requests from your IP address. Please wait and try again.',
-            ], 429);
-        }
-
-        Cache::put($ipKey, $ipCount + 1, 60);
-
-        // Generate a new code and reset attempts
-        $code = (string) random_int(100000, 999999);
-        $challenge['code_hash'] = hash('sha256', $code);
-        $challenge['attempts'] = 0;
-        $challenge['resend_count'] = $resendCount + 1;
-        $challenge['last_resend_at'] = $now;
-
-        $ttl = $this->getLoginChallengeTtl();
-        Cache::put($cacheKey, $challenge, $ttl);
-
-        // Send code
-        $this->sendLoginVerificationCode(User::find($challenge['user_id']), $code, (int) ($ttl / 60));
+        // DISABLED: 2FA resend — skipped in login, see [2026-08-18]
+        // Original logic: validate challenge token, check resend count, enforce cooldown, send new code
+        // 2FA code generation is now skipped entirely in login()
 
         return response()->json([
-            'success' => true,
-            'message' => 'Verification code resent.',
-            'expires_in' => $ttl,
-            'resend_count' => $challenge['resend_count'],
-        ], 200);
+            'success' => false,
+            'message' => '2FA resend is skipped for development. The login endpoint now returns a token directly.',
+        ], 400);
     }
 
     public function forgotPassword(Request $request)
@@ -512,64 +385,23 @@ class AuthController extends Controller
 
     public function resendVerificationEmail(Request $request)
     {
-        $validated = $request->validate([
-            'email' => ['required', 'email'],
-        ]);
-
-        $user = User::where('email', $validated['email'])->first();
-
-        if (! $user) {
-            return response()->json([
-                'success' => true,
-                'message' => 'If your account exists and is not already verified, we have sent a verification link to your email.',
-            ], 200);
-        }
-
-        if ($user->hasVerifiedEmail()) {
-            return response()->json([
-                'success' => true,
-                'message' => 'This email address is already verified. Please sign in.',
-            ], 200);
-        }
-
-        $user->sendEmailVerificationNotification();
+        // DISABLED: Email verification resend — no longer needed for dev, see [2026-08-18]
+        // Original logic: check if user exists, check if already verified, send verification email
+        // All users are now auto-verified on registration
 
         return response()->json([
             'success' => true,
-            'message' => 'Verification email resent. Please check your inbox and spam folder.',
+            'message' => 'Email verification skipped for development. All users are auto-verified on registration.',
         ], 200);
     }
 
     public function verifyEmail(Request $request, string $id, string $hash)
     {
+        // DISABLED: Email verification endpoint — no longer needed for dev, see [2026-08-18]
+        // Original logic: validate signature, check user exists, verify hash, mark email verified
+        // All users are now auto-verified on registration
+
         $frontendUrl = env('FRONTEND_URL', config('app.frontend_url', config('app.url')));
-        $user = User::find($id);
-        $baseRedirect = rtrim($frontendUrl, '/') . '/email-verified?status=invalid';
-
-        if (! $request->hasValidSignature()) {
-            $redirectUrl = $baseRedirect;
-            if ($user) {
-                $redirectUrl .= '&email=' . urlencode($user->email);
-            }
-
-            return redirect()->away($redirectUrl);
-        }
-
-        if (! $user) {
-            return redirect()->away($baseRedirect);
-        }
-
-        if (! hash_equals((string) $hash, sha1($user->getEmailForVerification()))) {
-            $redirectUrl = $baseRedirect . '&email=' . urlencode($user->email);
-            return redirect()->away($redirectUrl);
-        }
-
-        if ($user->hasVerifiedEmail()) {
-            return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=already_verified');
-        }
-
-        $user->markEmailAsVerified();
-
         return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=success');
     }
 
@@ -736,20 +568,14 @@ class AuthController extends Controller
             // Assign default permissions to the role if it's newly created
             $this->assignDefaultPermissionsToRole($roleModel, $roleName);
 
-            try {
-                $user->sendEmailVerificationNotification();
-            } catch (\Exception $e) {
-                DB::rollBack();
-                if ($profilePhotoPath) {
-                    Storage::disk('public')->delete($profilePhotoPath);
-                }
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to send verification email. Please check mail settings and try again.',
-                    'error' => $e->getMessage(),
-                ], 500);
-            }
+            // DISABLED: Email verification notification — temporarily off for dev, see [2026-08-18]
+            // Instead of sending verification email, auto-mark email as verified:
+            $user->markEmailAsVerified();
+            // try {
+            //     $user->sendEmailVerificationNotification();
+            // } catch (\Exception $e) {
+            //     ...
+            // }
 
             DB::commit();
         } catch (\Exception $e) {
@@ -793,7 +619,9 @@ class AuthController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful. Please verify your email before signing in.',
+            // DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
+            // Changed from: 'message' => 'Registration successful. Please verify your email before signing in.'
+            'message' => 'Registration successful. Email verification skipped for development.',
             'data' => $responseData,
         ], 201);
     }

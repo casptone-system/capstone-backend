@@ -14,10 +14,14 @@ use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
-class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVerifyEmail
+// DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
+// class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVerifyEmail
+class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes, MustVerifyEmail;
+    // DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
+    // Changed from: use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes, MustVerifyEmail;
+    use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes;
 
     /**
      * The attributes that are mass assignable.
@@ -266,10 +270,11 @@ class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVer
         return asset('storage/' . ltrim($this->profile_photo, '/'));
     }
 
-    public function sendEmailVerificationNotification(): void
-    {
-        $this->notify(new VerifyApiEmailNotification());
-    }
+    // DISABLED: Email verification notification — temporarily off for dev, see [2026-08-18]
+    // public function sendEmailVerificationNotification(): void
+    // {
+    //     $this->notify(new VerifyApiEmailNotification());
+    // }
 
     public function sendPasswordResetNotification($token): void
     {
