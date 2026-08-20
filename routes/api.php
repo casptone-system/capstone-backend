@@ -2,7 +2,8 @@
 
 use App\Http\Controllers\Api\AccreditationAreaController;
 use App\Http\Controllers\Api\AccreditationCycleController;
-use App\Http\Controllers\Api\AccreditationStructureController;
+use App\Http\Controllers\Api\AccreditationWorkspaceController;
+use App\Http\Controllers\Api\InstrumentTemplateController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CollegeController;
 use App\Http\Controllers\Api\ProgramController;
@@ -128,6 +129,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::apiResource('notifications', NotificationController::class)->only(['index']);
 
     // Messaging (conversations, messages, attachments)
+    Route::get('messages/contacts', [MessageController::class, 'contacts']);
     Route::get('messages/unread-count', [MessageController::class, 'getUnreadCount']);
     Route::get('messages', [MessageController::class, 'listConversations']);
     Route::post('messages/conversations', [MessageController::class, 'createConversation']);
@@ -143,6 +145,23 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('qa/reports/at-risk-programs', [QAController::class, 'atRiskProgramsReport']);
     Route::get('qa/accreditations', [QAController::class, 'accreditationPrograms']);
     Route::get('qa/accreditations/{cycle}', [QAController::class, 'accreditationDetail']);
+
+    Route::get('instrument-templates', [InstrumentTemplateController::class, 'index']);
+    Route::get('instrument-templates/{instrumentTemplate}', [InstrumentTemplateController::class, 'show']);
+    Route::post('instrument-templates', [InstrumentTemplateController::class, 'upsert']);
+    Route::delete('instrument-templates/areas/{area}', [InstrumentTemplateController::class, 'destroyArea']);
+
+    Route::get('accreditation-workspaces', [AccreditationWorkspaceController::class, 'index']);
+    Route::post('accreditation-workspaces', [AccreditationWorkspaceController::class, 'store']);
+    Route::get('accreditation-workspaces/{workspace}', [AccreditationWorkspaceController::class, 'show']);
+    Route::get('accreditation-workspaces/{workspace}/progress', [AccreditationWorkspaceController::class, 'progress']);
+    Route::post('accreditation-workspaces/{workspace}/areas/{area}/chair', [AccreditationWorkspaceController::class, 'assignChair']);
+    Route::post('accreditation-workspaces/{workspace}/areas/{area}/members', [AccreditationWorkspaceController::class, 'addMember']);
+    Route::delete('accreditation-workspaces/{workspace}/areas/{area}/members/{user}', [AccreditationWorkspaceController::class, 'removeMember']);
+    Route::get('accreditation-workspaces/{workspace}/parameters/{parameter}', [AccreditationWorkspaceController::class, 'parameter']);
+    Route::post('accreditation-workspaces/{workspace}/criteria/{requirement}/evidence', [AccreditationWorkspaceController::class, 'uploadEvidence']);
+    Route::post('accreditation-workspaces/{workspace}/criteria/{requirement}/done', [AccreditationWorkspaceController::class, 'markDone']);
+    Route::get('accreditation-workspaces/{workspace}/evidence/{evidence}/download', [AccreditationWorkspaceController::class, 'downloadEvidence']);
 
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);

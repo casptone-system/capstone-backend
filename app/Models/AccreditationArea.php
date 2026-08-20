@@ -64,6 +64,11 @@ class AccreditationArea extends Model
         return $this->hasMany(AccreditationRequirement::class, 'area_id');
     }
 
+    public function parameters(): HasMany
+    {
+        return $this->hasMany(AccreditationParameter::class, 'area_id')->orderBy('sort_order');
+    }
+
     /**
      * Get the chair of the area.
      */

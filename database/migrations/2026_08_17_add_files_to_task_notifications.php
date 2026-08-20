@@ -11,6 +11,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (! Schema::hasTable('task_notifications')) {
+            return;
+        }
+
         // Add files_enabled and file_folder_path to task_notifications
         Schema::table('task_notifications', function (Blueprint $table) {
             if (!Schema::hasColumn('task_notifications', 'files_enabled')) {

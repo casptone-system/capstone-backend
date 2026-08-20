@@ -63,7 +63,7 @@ class AccreditationCycleController extends Controller
         $validated = $request->validate([
             'college_id' => ['required', 'exists:colleges,id'],
             'program_id' => ['required', 'exists:programs,id'],
-            'level' => ['required', 'in:' . implode(',', AccreditationCycle::LEVELS)],
+            'level' => ['nullable', 'in:' . implode(',', AccreditationCycle::LEVELS)],
             'status' => ['required', 'in:' . implode(',', AccreditationCycle::STATUSES)],
             'phase' => ['nullable', 'string', 'max:255'],
             'instrument_name' => ['nullable', 'string', 'max:255'],
@@ -74,6 +74,8 @@ class AccreditationCycleController extends Controller
         
         // Set initial workflow status
         $validated['workflow_status'] = 'Initial Notice';
+        $validated['level'] = $validated['level'] ?? 'Level I';
+        $validated['phase'] = $validated['phase'] ?? null;
 
         $program = Program::findOrFail($validated['program_id']);
 
@@ -136,6 +138,11 @@ class AccreditationCycleController extends Controller
             'remarks' => ['nullable', 'string'],
             'workflow_status' => ['sometimes', 'in:' . implode(',', AccreditationCycle::WORKFLOW_STATUSES)],
         ]);
+
+        $actor = $request->user();
+        if (! $actor?->isProgramChair()) {
+            unset($validated['level'], $validated['phase']);
+        }
 
         if (array_key_exists('program_id', $validated) || array_key_exists('college_id', $validated)) {
             $programId = $validated['program_id'] ?? $accreditationCycle->program_id;
@@ -297,6 +304,12 @@ class AccreditationCycleController extends Controller
         }
 
         $accreditationCycle->save();
+
+        $workspaceUpdate = ['level' => $accreditationCycle->level];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('accreditation_workspaces', 'phase') && $accreditationCycle->phase) {
+            $workspaceUpdate['phase'] = $accreditationCycle->phase;
+        }
+        \App\Models\AccreditationWorkspace::where('cycle_id', $accreditationCycle->id)->update($workspaceUpdate);
 
         $after = [
             'level' => $accreditationCycle->level,

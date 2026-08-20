@@ -107,7 +107,7 @@ class AccreditationCycleApiTest extends TestCase
         $response = $this->postJson('/api/accreditation-cycles', []);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['college_id', 'program_id', 'level', 'status']);
+            ->assertJsonValidationErrors(['college_id', 'program_id', 'status']);
     }
 
     public function test_vpaa_can_create_cycle_for_valid_college_program_pair(): void
@@ -438,14 +438,14 @@ class AccreditationCycleApiTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('success', true)
-            ->assertJsonPath('data.level', 'Level II')
+            ->assertJsonPath('data.level', 'Level I')
             ->assertJsonPath('data.status', 'Ready')
             ->assertJsonPath('data.validUntil', '2026-06-30')
             ->assertJsonPath('data.readiness', 'Ready');
 
         $this->assertDatabaseHas('accreditation_cycles', [
             'id' => $cycle->id,
-            'level' => 'Level II',
+            'level' => 'Level I',
             'status' => 'Ready',
         ]);
     }
@@ -560,9 +560,9 @@ class AccreditationCycleApiTest extends TestCase
 
     public function test_unauthenticated_access_is_rejected(): void
     {
-        // Ensure no authentication is set
-        $response = $this->getJson('/api/accreditation-cycles');
+        $this->app['auth']->forgetGuards();
 
-        $response->assertStatus(401);
+        $this->getJson('/api/accreditation-cycles')
+            ->assertStatus(401);
     }
 }

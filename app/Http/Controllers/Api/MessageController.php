@@ -16,6 +16,13 @@ use Illuminate\Validation\Rule;
 
 class MessageController extends Controller
 {
+    public function contacts(Request $request): JsonResponse
+    {
+        $payload = app(\App\Services\AccreditationMessagingService::class)->contacts($request->user());
+
+        return response()->json(['success' => true, 'data' => $payload]);
+    }
+
     /**
      * Get all conversations for the current user
      */
@@ -24,7 +31,7 @@ class MessageController extends Controller
         $user = Auth::user();
         
         $conversations = $user->conversations()
-            ->where('is_archived', false)
+            ->wherePivot('is_archived', false)
             ->with(['accreditationCycle.program.college', 'creator', 'participants'])
             ->withCount(['messages'])
             ->orderByDesc('updated_at')
@@ -41,6 +48,7 @@ class MessageController extends Controller
                     'id' => $conversation->accreditationCycle->id,
                     'program_name' => $conversation->accreditationCycle->program->name,
                     'level' => $conversation->accreditationCycle->level,
+                    'phase' => $conversation->accreditationCycle->phase,
                     'college_name' => $conversation->accreditationCycle->program->college->name,
                 ] : null,
                 'creator' => [
@@ -171,7 +179,7 @@ class MessageController extends Controller
                     MessageAttachment::create([
                         'message_id' => $message->id,
                         'role_storage_file_id' => $storageFile->id,
-                        'file_name' => $storageFile->file_name,
+                        'file_name' => $storageFile->original_name ?: $storageFile->name,
                         'file_path' => $storageFile->file_path,
                         'file_mime' => $storageFile->mime_type,
                         'file_size' => $storageFile->file_size,
@@ -216,22 +224,24 @@ class MessageController extends Controller
         $user = Auth::user();
 
         $validated = $request->validate([
-            'accreditation_cycle_id' => [
-                'nullable',
-                'exists:accreditation_cycles,id',
-                Rule::requiredIf(fn () => $request->input('type') !== 'direct'),
-            ],
+            'accreditation_cycle_id' => ['nullable', 'exists:accreditation_cycles,id'],
+            'area_id' => ['nullable', 'exists:accreditation_areas,id'],
+            'parameter_id' => ['nullable', 'exists:accreditation_parameters,id'],
+            'workspace_id' => ['nullable', 'exists:accreditation_workspaces,id'],
             'subject' => 'required|string|max:255',
-            'type' => 'required|in:direct,vpaa_dean,dean_chair,chair_faculty,dean_vpaa,qa_vpaa,vpaa_qa,qa_dean,dean_qa,qa_chair,chair_qa',
+            'type' => ['required', Rule::in(\App\Services\AccreditationMessagingService::TYPES)],
             'participant_ids' => 'required|array|min:1',
             'participant_ids.*' => 'integer|exists:users,id',
         ]);
 
-        // Check authorization
-        $this->authorizeConversationCreation($user, $validated);
+        app(\App\Services\AccreditationMessagingService::class)
+            ->assertCanCreate($user, $validated['type'], $validated['participant_ids']);
 
         $conversation = Conversation::create([
-            'accreditation_cycle_id' => $validated['accreditation_cycle_id'],
+            'accreditation_cycle_id' => $validated['accreditation_cycle_id'] ?? null,
+            'area_id' => $validated['area_id'] ?? null,
+            'parameter_id' => $validated['parameter_id'] ?? null,
+            'workspace_id' => $validated['workspace_id'] ?? null,
             'subject' => $validated['subject'],
             'type' => $validated['type'],
             'created_by' => $user->id,
@@ -306,7 +316,7 @@ class MessageController extends Controller
         $user = Auth::user();
 
         $unreadCount = $user->conversations()
-            ->where('is_archived', false)
+            ->wherePivot('is_archived', false)
             ->get()
             ->reduce(function ($carry, $conversation) use ($user) {
                 return $carry + $conversation->getUnreadCountForUser($user->id);

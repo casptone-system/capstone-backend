@@ -206,6 +206,39 @@ class User extends Authenticatable
         return $this->team?->program_id;
     }
 
+    public function assignedProgram(): ?Program
+    {
+        if ($this->getEffectiveProgramId()) {
+            return Program::find($this->getEffectiveProgramId());
+        }
+
+        return Program::where('chair_id', $this->id)->first();
+    }
+
+    public function assignedProgramId(): ?int
+    {
+        return $this->assignedProgram()?->id;
+    }
+
+    public function ownsAssignedProgram(int $programId): bool
+    {
+        return (int) $this->assignedProgramId() === (int) $programId
+            || Program::where('id', $programId)->where('chair_id', $this->id)->exists();
+    }
+
+    public function belongsToProgram(int $programId): bool
+    {
+        if ((int) $this->program_id === (int) $programId) {
+            return true;
+        }
+
+        if ((int) $this->team?->program_id === (int) $programId) {
+            return true;
+        }
+
+        return $this->programMemberships()->where('program_id', $programId)->exists();
+    }
+
     public function getEffectiveCollegeId(): ?int
     {
         if ($this->college_id) {

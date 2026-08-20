@@ -14,6 +14,9 @@ class Conversation extends Model
 
     protected $fillable = [
         'accreditation_cycle_id',
+        'area_id',
+        'parameter_id',
+        'workspace_id',
         'subject',
         'type',
         'created_by',
@@ -25,6 +28,21 @@ class Conversation extends Model
     public function accreditationCycle(): BelongsTo
     {
         return $this->belongsTo(AccreditationCycle::class);
+    }
+
+    public function area(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationArea::class, 'area_id');
+    }
+
+    public function parameter(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationParameter::class, 'parameter_id');
+    }
+
+    public function workspace(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationWorkspace::class, 'workspace_id');
     }
 
     /**

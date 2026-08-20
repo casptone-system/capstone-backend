@@ -14,6 +14,7 @@ class AccreditationRequirement extends Model
 
     protected $fillable = [
         'area_id',
+        'parameter_id',
         'code',
         'title',
         'description',
@@ -26,5 +27,15 @@ class AccreditationRequirement extends Model
     public function area(): BelongsTo
     {
         return $this->belongsTo(AccreditationArea::class, 'area_id');
+    }
+
+    public function parameter(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationParameter::class, 'parameter_id');
+    }
+
+    public function evidence(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(CriterionEvidence::class, 'requirement_id');
     }
 }

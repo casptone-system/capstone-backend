@@ -13,9 +13,14 @@ class RoleStorageFolder extends Model
 
     protected $fillable = [
         'user_id',
+        'program_id',
         'parent_id',
+        'workspace_id',
+        'area_id',
+        'parameter_id',
         'role',
         'name',
+        'folder_kind',
         'is_favorite',
         'status',
         'deleted_at',

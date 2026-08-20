@@ -550,20 +550,9 @@ class UserController extends Controller
             abort(401);
         }
 
-        $recipients = User::query()
-            ->where('id', '!=', $user->id)
-            ->with('roles:id,name')
-            ->orderBy('name')
-            ->get(['id', 'name', 'email', 'profile_photo', 'program_id', 'college_id'])
-            ->map(fn (User $recipient) => [
-                'id' => $recipient->id,
-                'name' => $recipient->name,
-                'email' => $recipient->email,
-                'role' => $recipient->roles->pluck('name')->first() ?? 'User',
-                'profile_photo' => $recipient->profile_photo,
-            ]);
+        $recipients = app(\App\Services\AccreditationMessagingService::class)->contacts($user);
 
-        return response()->json(['success' => true, 'data' => $recipients]);
+        return response()->json(['success' => true, 'data' => $recipients['groups']]);
     }
 
     public function programFaculty(Request $request)
@@ -595,17 +584,31 @@ class UserController extends Controller
             })
             ->where(function ($q) {
                 $q->whereHas('roles', function ($roleQuery) {
-                    $roleQuery->whereRaw('LOWER(name) = ?', ['faculty']);
+                    $roleQuery->where(function ($nameQuery) {
+                        $nameQuery->whereRaw('LOWER(name) = ?', ['faculty'])
+                            ->orWhereRaw('LOWER(name) = ?', ['area in-charge']);
+                    });
                 })->orWhereExists(function ($sub) {
                     $sub->from('program_members as pm')
                         ->whereColumn('pm.user_id', 'users.id')
-                        ->whereRaw('LOWER(COALESCE(pm.role, "")) = ?', ['faculty']);
+                        ->whereRaw('LOWER(COALESCE(pm.role, "")) in (?, ?)', ['faculty', 'area in-charge']);
                 });
             })
+            ->with('roles')
             ->orderBy('name')
             ->get(['id', 'name', 'email', 'profile_photo', 'program_id']);
 
-        return response()->json(['success' => true, 'data' => $faculty]);
+        return response()->json([
+            'success' => true,
+            'data' => $faculty->map(fn (User $person) => [
+                'id' => $person->id,
+                'name' => $person->name,
+                'email' => $person->email,
+                'photo' => $person->profile_photo_url,
+                'profilePhoto' => $person->profile_photo_url,
+                'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
+            ])->values(),
+        ]);
     }
 
     public function update(Request $request, string $id)

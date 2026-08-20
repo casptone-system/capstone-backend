@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RolePermissionSeeder::class,
             AccreditationAreaSeeder::class,
+            InstrumentTemplateSeeder::class,
         ]);
 
         if (!app()->environment('production')) {

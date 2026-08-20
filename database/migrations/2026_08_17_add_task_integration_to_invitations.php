@@ -11,20 +11,21 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('invitations', function (Blueprint $table) {
-            if (!Schema::hasColumn('invitations', 'send_welcome_task')) {
-                // Track if a welcome task should be sent
-                $table->boolean('send_welcome_task')->default(true)->after('status');
-            }
+        if (Schema::hasTable('invitations')) {
+            Schema::table('invitations', function (Blueprint $table) {
+                if (!Schema::hasColumn('invitations', 'send_welcome_task')) {
+                    $table->boolean('send_welcome_task')->default(true)->after('status');
+                }
 
-            if (!Schema::hasColumn('invitations', 'welcome_task_id')) {
-                // Store related task notification
-                $table->foreignId('welcome_task_id')->nullable()->after('send_welcome_task')
-                    ->constrained('task_notifications')->nullOnDelete();
-            }
-        });
+                if (!Schema::hasColumn('invitations', 'welcome_task_id') && Schema::hasTable('task_notifications')) {
+                    $table->foreignId('welcome_task_id')->nullable()->after('send_welcome_task')
+                        ->constrained('task_notifications')->nullOnDelete();
+                }
+            });
+        }
 
-        Schema::table('task_notifications', function (Blueprint $table) {
+        if (Schema::hasTable('task_notifications')) {
+            Schema::table('task_notifications', function (Blueprint $table) {
             if (!Schema::hasColumn('task_notifications', 'is_welcome_task')) {
                 // Track if this is a welcome/onboarding task
                 $table->boolean('is_welcome_task')->default(false)->after('type');
@@ -36,6 +37,7 @@ return new class extends Migration
                     ->constrained('invitations')->nullOnDelete();
             }
         });
+        }
     }
 
     /**
