@@ -21,6 +21,26 @@ class AccreditationArea extends Model
     ];
 
     /**
+     * The 10 fixed AACCUP accreditation areas used for faculty area assignments.
+     * These are static/predefined per the Feature: Area Assignment Module.
+     * `code` is a stable identifier (area-1 … area-10) used for matching.
+     *
+     * @var list<array{code: string, name: string}>
+     */
+    public const AACCUP_AREAS = [
+        ['code' => 'area-1',  'name' => 'Area 1 – Vision, Mission, Goals and Objectives'],
+        ['code' => 'area-2',  'name' => 'Area 2 – Faculty'],
+        ['code' => 'area-3',  'name' => 'Area 3 – Curriculum and Instruction'],
+        ['code' => 'area-4',  'name' => 'Area 4 – Support to Students'],
+        ['code' => 'area-5',  'name' => 'Area 5 – Research'],
+        ['code' => 'area-6',  'name' => 'Area 6 – Extension and Community Involvement'],
+        ['code' => 'area-7',  'name' => 'Area 7 – Library'],
+        ['code' => 'area-8',  'name' => 'Area 8 – Physical Plant and Facilities'],
+        ['code' => 'area-9',  'name' => 'Area 9 – Laboratories'],
+        ['code' => 'area-10', 'name' => 'Area 10 – Administration'],
+    ];
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var list<string>
@@ -29,8 +49,10 @@ class AccreditationArea extends Model
         'cycle_id',
         'instrument_id',
         'name',
+        'code',
         'description',
         'chair_id',
+        'deadline',
         'status',
     ];
 
@@ -43,6 +65,7 @@ class AccreditationArea extends Model
     {
         return [
             'chair_id' => 'integer',
+            'deadline' => 'datetime',
         ];
     }
 

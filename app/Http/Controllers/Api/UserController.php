@@ -611,6 +611,48 @@ class UserController extends Controller
         ]);
     }
 
+    /**
+     * Search users by name or email for the searchable dropdown used in
+     * the Faculty Area Assignments module (Program Chair UI).
+     */
+    public function search(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! ($user->isProgramChair() || $user->isDean() || $user->isVPAA() || $user->isSuperAdmin())) {
+            abort(403, 'You are not authorized to search users.');
+        }
+
+        $q = trim((string) $request->input('q', ''));
+        $query = User::with('roles')->whereNull('users.deleted_at');
+
+        if ($q !== '') {
+            $query->where(function ($where) use ($q) {
+                $where->where('users.name', 'like', "%{$q}%")
+                    ->orWhere('users.email', 'like', "%{$q}%")
+                    ->orWhere('users.first_name', 'like', "%{$q}%")
+                    ->orWhere('users.last_name', 'like', "%{$q}%");
+            });
+        }
+
+        $results = $query
+            ->orderBy('users.last_name')
+            ->orderBy('users.first_name')
+            ->limit((int) $request->input('limit', 25))
+            ->get(['id', 'name', 'first_name', 'middle_name', 'last_name', 'email', 'profile_photo']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $results->map(fn (User $person) => [
+                'id' => $person->id,
+                'name' => $person->name,
+                'email' => $person->email,
+                'photo' => $person->profile_photo_url,
+                'profilePhoto' => $person->profile_photo_url,
+                'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
+            ])->values(),
+        ]);
+    }
+
     public function update(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);

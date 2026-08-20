@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccreditationAreaController;
 use App\Http\Controllers\Api\AccreditationCycleController;
+use App\Http\Controllers\Api\AccreditationStructureController;
 use App\Http\Controllers\Api\AccreditationWorkspaceController;
 use App\Http\Controllers\Api\InstrumentTemplateController;
 use App\Http\Controllers\Api\AuthController;
@@ -70,6 +71,9 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('accreditation-areas/{accreditationArea}/members', [AccreditationAreaController::class, 'addMember']);
     Route::delete('accreditation-areas/{accreditationArea}/members/{member}', [AccreditationAreaController::class, 'removeMember']);
     Route::get('accreditation-areas/{accreditationArea}/progress', [AccreditationAreaController::class, 'progress']);
+    Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
+    Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
+    Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);
     Route::post('accreditation-areas/submit-files', [AccreditationAreaController::class, 'submitFiles']);
     Route::apiResource('accreditation-areas', AccreditationAreaController::class);
 
@@ -193,6 +197,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('area-in-charges', [UserController::class, 'areaInCharges']);
     Route::get('message-recipients', [UserController::class, 'messageRecipients']);
     Route::get('program-faculty', [UserController::class, 'programFaculty']);
+    Route::get('users/search', [UserController::class, 'search']);
 
     // Super Administrator user management and administration
     Route::get('admin/dashboard', [UserController::class, 'dashboard']);

@@ -266,7 +266,11 @@ class User extends Authenticatable
 
     public function assignedAreaIds()
     {
-        return AreaMember::where('user_id', $this->id)->pluck('area_id');
+        return AreaMember::where('user_id', $this->id)
+            ->pluck('area_id')
+            ->concat(AccreditationArea::where('chair_id', $this->id)->pluck('id'))
+            ->unique()
+            ->values();
     }
 
     protected function normalizeRoleName(string $role): string

@@ -120,6 +120,10 @@ class AccreditationAreaController extends Controller
 
     /**
      * Assign a chair to the accreditation area.
+     *
+     * Assigning a new chair replaces the previous chair for this area
+     * (no stacking). The chosen chair is also removed from the member list
+     * so a user cannot be both Area Chair and Member of the same area.
      */
     public function assignChair(Request $request, AccreditationArea $accreditationArea)
     {
@@ -128,11 +132,14 @@ class AccreditationAreaController extends Controller
             'chair_id' => ['required', 'exists:users,id'],
         ]);
 
+        // A user cannot be both Area Chair and Member of the same area.
+        $accreditationArea->members()->where('user_id', $validated['chair_id'])->delete();
+
         $accreditationArea->update(['chair_id' => $validated['chair_id']]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Chair assigned successfully.',
+            'message' => 'Area Chair assigned successfully.',
             'data' => new AccreditationAreaResource($accreditationArea->load('chair', 'members.user')),
         ], 200);
     }
@@ -369,6 +376,121 @@ class AccreditationAreaController extends Controller
                 'message' => 'Failed to submit files. Please try again.',
             ], 500);
         }
+    }
+
+    /**
+     * List the 10 fixed AACCUP areas for the authenticated Program Chair.
+     *
+     * Seeding is idempotent: the fixed areas for the program's latest
+     * accreditation cycle are created once if missing, and subsequent
+     * requests simply return the persisted rows with their current chair,
+     * members and deadline.
+     */
+    public function programChairAreas(Request $request)
+    {
+        $user = $request->user() ?? $request->user('api');
+        if (! $user || ! $user->isProgramChair()) {
+            abort(403, 'Only a Program Chair can manage area assignments.');
+        }
+
+        $programId = $user->getEffectiveProgramId();
+        if (! $programId) {
+            abort(422, 'You need a program assigned before managing area assignments.');
+        }
+
+        $cycle = AccreditationCycle::where('program_id', $programId)
+            ->orderByDesc('created_at')
+            ->first();
+
+        if (! $cycle) {
+            return response()->json(['success' => true, 'data' => []], 200);
+        }
+
+        foreach (AccreditationArea::AACCUP_AREAS as $areaDef) {
+            AccreditationArea::firstOrCreate(
+                [
+                    'cycle_id' => $cycle->id,
+                    'code' => $areaDef['code'],
+                ],
+                [
+                    'name' => $areaDef['name'],
+                    'status' => 'Not Started',
+                ]
+            );
+        }
+
+        $areas = $cycle->areas()
+            ->with(['chair', 'members.user'])
+            ->whereNotNull('code')
+            ->orderBy('id')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Accreditation areas retrieved successfully.',
+            'data' => AccreditationAreaResource::collection($areas),
+        ], 200);
+    }
+
+    /**
+     * Set / update the submission deadline for an accreditation area.
+     */
+    public function setDeadline(Request $request, AccreditationArea $accreditationArea)
+    {
+        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $validated = $request->validate([
+            'deadline' => ['required', 'date'],
+        ]);
+
+        $accreditationArea->update(['deadline' => $validated['deadline']]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Submission deadline updated successfully.',
+            'data' => new AccreditationAreaResource($accreditationArea->load('chair', 'members.user')),
+        ], 200);
+    }
+
+    /**
+     * Set / replace the member list for an accreditation area.
+     *
+     * The current Area Chair is always excluded so a user cannot be both
+     * Area Chair and Member of the same area at the same time.
+     */
+    public function setMembers(Request $request, AccreditationArea $accreditationArea)
+    {
+        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $validated = $request->validate([
+            'user_ids' => ['required', 'array'],
+            'user_ids.*' => ['integer', 'distinct', 'exists:users,id'],
+        ]);
+
+        $chairId = $accreditationArea->chair_id;
+
+        $userIds = collect($validated['user_ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter(function ($id) use ($chairId) {
+                return $chairId === null || $id !== (int) $chairId;
+            })
+            ->unique()
+            ->values()
+            ->all();
+
+        DB::transaction(function () use ($accreditationArea, $userIds) {
+            $accreditationArea->members()->delete();
+            foreach ($userIds as $userId) {
+                $accreditationArea->members()->create([
+                    'user_id' => $userId,
+                    'role' => 'member',
+                ]);
+            }
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Area members updated successfully.',
+            'data' => new AccreditationAreaResource($accreditationArea->fresh('chair', 'members.user')),
+        ], 200);
     }
 
     private function assertCanViewCycle($user, AccreditationCycle $cycle): void
