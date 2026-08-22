@@ -23,7 +23,15 @@ class FacultyMyAreasTest extends TestCase
     private User $otherFaculty;
     private User $qa;
     private AccreditationArea $area1;
+    private AccreditationArea $area2;
     private AccreditationArea $area3;
+    private AccreditationArea $area4;
+    private AccreditationArea $area5;
+    private AccreditationArea $area6;
+    private AccreditationArea $area7;
+    private AccreditationArea $area8;
+    private AccreditationArea $area9;
+    private AccreditationArea $area10;
 
     protected function setUp(): void
     {
@@ -67,10 +75,59 @@ class FacultyMyAreasTest extends TestCase
             'role' => 'member',
         ]);
 
-        AccreditationArea::factory()->create([
+        $this->area2 = AccreditationArea::factory()->create([
             'cycle_id' => $cycle->id,
             'code' => 'area-2',
             'name' => 'Area 2 – Faculty',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area4 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-4',
+            'name' => 'Area 4 – Support to Students',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area5 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-5',
+            'name' => 'Area 5 – Research',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area6 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-6',
+            'name' => 'Area 6 – Extension and Community Involvement',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area7 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-7',
+            'name' => 'Area 7 – Library',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area8 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-8',
+            'name' => 'Area 8 – Physical Plant and Facilities',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area9 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-9',
+            'name' => 'Area 9 – Laboratories',
+            'status' => 'Not Started',
+        ]);
+
+        $this->area10 = AccreditationArea::factory()->create([
+            'cycle_id' => $cycle->id,
+            'code' => 'area-10',
+            'name' => 'Area 10 – Administration',
             'status' => 'Not Started',
         ]);
     }
@@ -131,7 +188,278 @@ class FacultyMyAreasTest extends TestCase
         $this->assertCount(18, $rows);
         $this->assertFalse($rows[0]['isDone']);
         $this->assertSame('SYSTEM - INPUTS AND PROCESSES', $rows[0]['content']);
-        $this->assertSame('0.1. The VMGO are crafted and duly approved by the BOR/BOT.', $rows[17]['content']);
+        $this->assertSame('O.1. The VMGO are crafted and duly approved by the BOR/BOT.', $rows[17]['content']);
+    }
+
+    public function test_area_2_seeds_eight_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area2->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(8, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('ACADEMIC QUALIFICATIONS AND PROFESSIONAL EXPERIENCE', $parameters[0]['name']);
+        $this->assertEquals('RECRUITMENT, SELECTION AND ORIENTATION', $parameters[1]['name']);
+        $this->assertEquals('H', $parameters[7]['code']);
+        $this->assertEquals('PROFESSIONALISM', $parameters[7]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.1. The institution has qualified and competent faculty.', end($rows)['content']);
+    }
+
+    public function test_area_3_seeds_six_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area3->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(6, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('CURRICULUM AND PROGRAM OF STUDIES', $parameters[0]['name']);
+        $this->assertEquals('INSTRUCTIONAL PROCESS, METHODOLOGIES AND LEARNING OPPORTUNITIES', $parameters[1]['name']);
+        $this->assertEquals('F', $parameters[5]['code']);
+        $this->assertEquals('ADMINISTRATIVE SUPPORT FOR EFFECTIVE INSTRUCTION', $parameters[5]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.1. The curriculum is responsive and relevant to the demand of times.', end($rows)['content']);
+    }
+
+    public function test_area_4_seeds_five_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area4->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(5, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('STUDENT SERVICES PROGRAM (SSP)', $parameters[0]['name']);
+        $this->assertEquals('STUDENT WELFARE', $parameters[1]['name']);
+        $this->assertEquals('STUDENT DEVELOPMENT', $parameters[2]['name']);
+        $this->assertEquals('INSTITUTIONAL STUDENT PROGRAMS AND SERVICES', $parameters[3]['name']);
+        $this->assertEquals('E', $parameters[4]['code']);
+        $this->assertEquals('RESEARCH, MONITORING AND EVALUATION', $parameters[4]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('Objectives', $rows[1]['content']);
+        $this->assertSame('O.1. The students are satisfied with the Student Services Program.', end($rows)['content']);
+
+        $paramERows = $this->getJson("/api/parameters/{$parameters[4]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.1. Research outputs are presented and published.', end($paramERows)['content']);
+    }
+
+    public function test_area_5_seeds_four_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area5->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(4, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('PRIORITIES AND RELEVANCE', $parameters[0]['name']);
+        $this->assertEquals('FUNDING AND OTHER RESOURCES', $parameters[1]['name']);
+        $this->assertEquals('IMPLEMENTATION, MONITORING, EVALUATION AND UTILIZATION OF RESEARCH RESULTS/OUTPUTS', $parameters[2]['name']);
+        $this->assertEquals('D', $parameters[3]['code']);
+        $this->assertEquals('PUBLICATION AND DISSEMINATION', $parameters[3]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.2. Research results are published.', end($rows)['content']);
+
+        $paramDRows = $this->getJson("/api/parameters/{$parameters[3]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.3. Patented and copyrighted research outputs are commercialized.', end($paramDRows)['content']);
+    }
+
+    public function test_area_6_seeds_four_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area6->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(4, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('PRIORITIES AND RELEVANCE', $parameters[0]['name']);
+        $this->assertEquals('PLANNING, IMPLEMENTATION, MONITORING AND EVALUATION', $parameters[1]['name']);
+        $this->assertEquals('FUNDING AND OTHER RESOURCES', $parameters[2]['name']);
+        $this->assertEquals('D', $parameters[3]['code']);
+        $this->assertEquals('COMMUNITY INVOLVEMENT AND PARTICIPATION IN THE INSTITUTION\'S ACTIVITIES', $parameters[3]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.1. Priority and relevant extension projects and activities are conducted.', end($rows)['content']);
+
+        $paramDRows = $this->getJson("/api/parameters/{$parameters[3]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.1. There is wholesome coordination between the Extension Program implementers and the target clientele/beneficiaries.', end($paramDRows)['content']);
+    }
+
+    public function test_area_7_seeds_seven_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area7->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(7, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('ADMINISTRATION', $parameters[0]['name']);
+        $this->assertEquals('ADMINISTRATIVE STAFF', $parameters[1]['name']);
+        $this->assertEquals('COLLECTION DEVELOPMENT, ORGANIZATION AND PRESERVATION', $parameters[2]['name']);
+        $this->assertEquals('SERVICES AND UTILIZATION', $parameters[3]['name']);
+        $this->assertEquals('PHYSICAL SET-UP AND FACILITIES', $parameters[4]['name']);
+        $this->assertEquals('FINANCIAL SUPPORT', $parameters[5]['name']);
+        $this->assertEquals('G', $parameters[6]['code']);
+        $this->assertEquals('LINKAGES', $parameters[6]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.2. The library organizational structure is well-designed and effectively implemented.', end($rows)['content']);
+
+        $paramGRows = $this->getJson("/api/parameters/{$parameters[6]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.1. Library resource sharing and linkages are well-established.', end($paramGRows)['content']);
+    }
+
+    public function test_area_8_seeds_ten_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area8->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(10, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('CAMPUS', $parameters[0]['name']);
+        $this->assertEquals('BUILDINGS', $parameters[1]['name']);
+        $this->assertEquals('CLASSROOMS', $parameters[2]['name']);
+        $this->assertEquals('OFFICES AND STAFF ROOMS', $parameters[3]['name']);
+        $this->assertEquals('ASSEMBLY, ATHLETIC AND SPORTS FACILITIES', $parameters[4]['name']);
+        $this->assertEquals('MEDICAL AND DENTAL CLINIC', $parameters[5]['name']);
+        $this->assertEquals('STUDENT CENTER', $parameters[6]['name']);
+        $this->assertEquals('FOOD SERVICES/CANTEEN/CAFETERIA', $parameters[7]['name']);
+        $this->assertEquals('ACCREDITATION CENTER', $parameters[8]['name']);
+        $this->assertEquals('J', $parameters[9]['code']);
+        $this->assertEquals('HOUSING (OPTIONAL)', $parameters[9]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.4. The campus is well-planned, clean and properly landscaped.', end($rows)['content']);
+
+        $paramJRows = $this->getJson("/api/parameters/{$parameters[9]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.2. There is wholesome coordination among the Institution, the LGU\'s and the owners of private boarding houses.', end($paramJRows)['content']);
+    }
+
+    public function test_area_9_seeds_four_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area9->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(4, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('LABORATORIES, SHOPS/FACILITIES', $parameters[0]['name']);
+        $this->assertEquals('EQUIPMENT AND SUPPLIES', $parameters[1]['name']);
+        $this->assertEquals('MAINTENANCE', $parameters[2]['name']);
+        $this->assertEquals('D', $parameters[3]['code']);
+        $this->assertEquals('SPECIAL PROVISIONS', $parameters[3]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.1. The laboratories and shops are well-equipped, functional and conducive to learning.', end($rows)['content']);
+
+        $paramDRows = $this->getJson("/api/parameters/{$parameters[3]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.1. The special provisions in CMO of the program are complied with.', end($paramDRows)['content']);
+    }
+
+    public function test_area_10_seeds_eight_parameters_with_instrument_content(): void
+    {
+        Sanctum::actingAs($this->qa);
+
+        $parameters = $this->getJson("/api/accreditation-areas/{$this->area10->id}/parameters")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(8, $parameters);
+        $this->assertEquals('A', $parameters[0]['code']);
+        $this->assertEquals('ORGANIZATION', $parameters[0]['name']);
+        $this->assertEquals('ACADEMIC ADMINISTRATION', $parameters[1]['name']);
+        $this->assertEquals('STUDENT ADMINISTRATION', $parameters[2]['name']);
+        $this->assertEquals('FINANCIAL MANAGEMENT', $parameters[3]['name']);
+        $this->assertEquals('SUPPLY MANAGEMENT', $parameters[4]['name']);
+        $this->assertEquals('RECORDS MANAGEMENT', $parameters[5]['name']);
+        $this->assertEquals('INSTITUTIONAL PLANNING AND DEVELOPMENT', $parameters[6]['name']);
+        $this->assertEquals('H', $parameters[7]['code']);
+        $this->assertEquals('PERFORMANCE OF ADMINISTRATIVE PERSONNEL', $parameters[7]['name']);
+
+        $rows = $this->getJson("/api/parameters/{$parameters[0]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('SYSTEM – INPUTS AND PROCESSES', $rows[0]['content']);
+        $this->assertSame('O.1. The institution has a well-designed and functional organizational structure.', end($rows)['content']);
+
+        $paramHRows = $this->getJson("/api/parameters/{$parameters[7]['id']}/rows")
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertSame('O.1. The administrative personnel/staff have commendable performance.', end($paramHRows)['content']);
     }
 
     public function test_mark_as_done_is_shared_across_area_team(): void
