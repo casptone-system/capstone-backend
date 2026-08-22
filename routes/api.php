@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\ProgramController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DeanController;
+use App\Http\Controllers\Api\FacultyAreaContentController;
 use App\Http\Controllers\Api\FacultyTaskController;
 use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\NotificationController;
@@ -40,6 +41,7 @@ Route::middleware(['security', 'audit.api'])->group(function () {
 Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::get('users/me/areas', [FacultyAreaContentController::class, 'myAreas']);
     Route::post('/me/profile-photo', [AuthController::class, 'updateProfilePhoto']);
 
     // Colleges (GET /colleges, POST /colleges + full CRUD)
@@ -71,6 +73,12 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('accreditation-areas/{accreditationArea}/members', [AccreditationAreaController::class, 'addMember']);
     Route::delete('accreditation-areas/{accreditationArea}/members/{member}', [AccreditationAreaController::class, 'removeMember']);
     Route::get('accreditation-areas/{accreditationArea}/progress', [AccreditationAreaController::class, 'progress']);
+    Route::get('accreditation-areas/{accreditationArea}/parameters', [FacultyAreaContentController::class, 'parameters']);
+    Route::post('accreditation-areas/{accreditationArea}/parameters', [FacultyAreaContentController::class, 'storeParameter']);
+    Route::get('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'rows']);
+    Route::post('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'storeRow']);
+    Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
+    Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
     Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);
@@ -143,6 +151,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('messages/conversations/{conversation}/archive', [MessageController::class, 'archiveConversation']);
 
     // QA Dashboard and Reports (monitoring and viewing only)
+    Route::get('qa/areas', [FacultyAreaContentController::class, 'qaAreas']);
     Route::get('qa/dashboard', [QAController::class, 'dashboard']);
     Route::get('qa/reports/program-readiness', [QAController::class, 'programReadinessReport']);
     Route::get('qa/reports/college-comparison', [QAController::class, 'collegeComparisonReport']);

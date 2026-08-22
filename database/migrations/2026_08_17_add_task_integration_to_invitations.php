@@ -13,12 +13,19 @@ return new class extends Migration
     {
         if (Schema::hasTable('invitations')) {
             Schema::table('invitations', function (Blueprint $table) {
-                if (!Schema::hasColumn('invitations', 'send_welcome_task')) {
-                    $table->boolean('send_welcome_task')->default(true)->after('status');
+                if (! Schema::hasColumn('invitations', 'status')) {
+                    $table->enum('status', ['pending', 'requested', 'accepted', 'expired', 'revoked'])
+                        ->default('pending');
+                }
+            });
+
+            Schema::table('invitations', function (Blueprint $table) {
+                if (! Schema::hasColumn('invitations', 'send_welcome_task')) {
+                    $table->boolean('send_welcome_task')->default(true);
                 }
 
-                if (!Schema::hasColumn('invitations', 'welcome_task_id') && Schema::hasTable('task_notifications')) {
-                    $table->foreignId('welcome_task_id')->nullable()->after('send_welcome_task')
+                if (! Schema::hasColumn('invitations', 'welcome_task_id') && Schema::hasTable('task_notifications')) {
+                    $table->foreignId('welcome_task_id')->nullable()
                         ->constrained('task_notifications')->nullOnDelete();
                 }
             });
@@ -26,17 +33,15 @@ return new class extends Migration
 
         if (Schema::hasTable('task_notifications')) {
             Schema::table('task_notifications', function (Blueprint $table) {
-            if (!Schema::hasColumn('task_notifications', 'is_welcome_task')) {
-                // Track if this is a welcome/onboarding task
-                $table->boolean('is_welcome_task')->default(false)->after('type');
-            }
+                if (! Schema::hasColumn('task_notifications', 'is_welcome_task')) {
+                    $table->boolean('is_welcome_task')->default(false);
+                }
 
-            if (!Schema::hasColumn('task_notifications', 'invitation_id')) {
-                // Link to invitation if created from one
-                $table->foreignId('invitation_id')->nullable()->after('is_welcome_task')
-                    ->constrained('invitations')->nullOnDelete();
-            }
-        });
+                if (! Schema::hasColumn('task_notifications', 'invitation_id')) {
+                    $table->foreignId('invitation_id')->nullable()
+                        ->constrained('invitations')->nullOnDelete();
+                }
+            });
         }
     }
 

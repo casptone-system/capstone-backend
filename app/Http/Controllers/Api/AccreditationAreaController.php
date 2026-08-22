@@ -461,7 +461,7 @@ class AccreditationAreaController extends Controller
     {
         $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
-            'user_ids' => ['required', 'array'],
+            'user_ids' => ['present', 'array'],
             'user_ids.*' => ['integer', 'distinct', 'exists:users,id'],
         ]);
 

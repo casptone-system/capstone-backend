@@ -24,4 +24,9 @@ class AccreditationParameter extends Model
     {
         return $this->hasMany(CriterionEvidence::class, 'parameter_id');
     }
+
+    public function contentRows(): HasMany
+    {
+        return $this->hasMany(ParameterContentRow::class, 'parameter_id')->orderBy('sort_order')->orderBy('id');
+    }
 }

@@ -131,4 +131,13 @@ class AccreditationArea extends Model
     {
         return $this->hasMany(Review::class, 'area_id');
     }
+
+    public function sidebarLabel(): string
+    {
+        if (is_string($this->code) && preg_match('/area-(\d+)/i', $this->code, $matches)) {
+            return 'AREA '.$matches[1];
+        }
+
+        return strtoupper((string) ($this->name ?: 'AREA'));
+    }
 }

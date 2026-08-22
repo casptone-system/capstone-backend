@@ -152,6 +152,18 @@ public function test_set_members_excludes_chair_from_member_list(): void
         $this->assertEquals('2026-12-31 17:00:00', $area->deadline->toDateTimeString());
     }
 
+    public function test_set_members_allows_empty_member_list(): void
+    {
+        $areas = $this->getJson('/api/program-chair/areas')->json('data');
+        $area = AccreditationArea::findOrFail($areas[0]['id']);
+
+        $this->postJson("/api/accreditation-areas/{$area->id}/set-members", ['user_ids' => []])
+            ->assertStatus(200)
+            ->assertJsonPath('success', true);
+
+        $this->assertSame(0, AreaMember::where('area_id', $area->id)->count());
+    }
+
     public function test_set_members_updates_role_scope_for_assigned_members(): void
     {
         $areas = $this->getJson('/api/program-chair/areas')->json('data');

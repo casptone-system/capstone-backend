@@ -9,6 +9,13 @@ return new class extends Migration
     public function up(): void
     {
         if (Schema::hasTable('invitations')) {
+            Schema::table('invitations', function (Blueprint $table) {
+                if (! Schema::hasColumn('invitations', 'status')) {
+                    $table->enum('status', ['pending', 'requested', 'accepted', 'expired', 'revoked'])
+                        ->default('pending');
+                }
+            });
+
             return;
         }
 
