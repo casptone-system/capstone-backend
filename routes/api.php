@@ -6,14 +6,15 @@ use App\Http\Controllers\Api\AccreditationStructureController;
 use App\Http\Controllers\Api\AccreditationWorkspaceController;
 use App\Http\Controllers\Api\InstrumentTemplateController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\CollegeController;
+use App\Http\Controllers\Api\ProgramActiveLevelController;
 use App\Http\Controllers\Api\ProgramController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DeanController;
 use App\Http\Controllers\Api\FacultyAreaContentController;
 use App\Http\Controllers\Api\FacultyTaskController;
-use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\QAController;
 use App\Http\Controllers\Api\ReportController;
@@ -49,11 +50,14 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
 
     // Programs (GET /programs, POST /programs + full CRUD)
     Route::apiResource('programs', ProgramController::class);
+    Route::get('programs/{program}/active-level', [ProgramActiveLevelController::class, 'show']);
+    Route::put('programs/{program}/active-level', [ProgramActiveLevelController::class, 'update']);
     Route::delete('programs/{program}/members/{user}', [ProgramController::class, 'removeMember']);
 
     // Accreditation Cycles (CRUD + history + dashboard)
     Route::get('vpaa/dashboard', [AccreditationCycleController::class, 'vpaaDashboard']);
     Route::get('accreditation-cycles/dashboard', [AccreditationCycleController::class, 'dashboard']);
+    Route::get('accreditation-cycles/level-status', [AccreditationCycleController::class, 'levelStatus']);
     Route::get('accreditation-cycles/history/{program}', [AccreditationCycleController::class, 'history']);
     Route::post('accreditation-cycles/{accreditationCycle}/acknowledge', [AccreditationCycleController::class, 'acknowledge']);
     Route::post('accreditation-cycles/{accreditationCycle}/forward-to-chair', [AccreditationCycleController::class, 'forwardToChair']);
@@ -79,7 +83,9 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'storeRow']);
     Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
     Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
+    Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
+    Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
     Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
     Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);
     Route::post('accreditation-areas/submit-files', [AccreditationAreaController::class, 'submitFiles']);
@@ -106,7 +112,14 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('documents/{document}/replace', [DocumentController::class, 'replace']);
     Route::get('documents/{document}/versions', [DocumentController::class, 'versions']);
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);
+    Route::get('documents/{document}/preview', [DocumentController::class, 'preview']);
     Route::apiResource('documents', DocumentController::class);
+
+    Route::get('uploads/config', [ChunkedUploadController::class, 'config']);
+    Route::post('uploads/initiate', [ChunkedUploadController::class, 'initiate']);
+    Route::post('uploads/{upload}/chunks', [ChunkedUploadController::class, 'storeChunk']);
+    Route::post('uploads/{upload}/complete', [ChunkedUploadController::class, 'complete']);
+    Route::delete('uploads/{upload}', [ChunkedUploadController::class, 'destroy']);
 
     // Role-specific storage vaults
     Route::get('role-storage', [RoleStorageController::class, 'index']);
@@ -139,16 +152,6 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('notifications/{id}/download-instrument', [NotificationController::class, 'downloadInstrumentFile']);
     Route::delete('notifications/{id}', [NotificationController::class, 'destroy']);
     Route::apiResource('notifications', NotificationController::class)->only(['index']);
-
-    // Messaging (conversations, messages, attachments)
-    Route::get('messages/contacts', [MessageController::class, 'contacts']);
-    Route::get('messages/unread-count', [MessageController::class, 'getUnreadCount']);
-    Route::get('messages', [MessageController::class, 'listConversations']);
-    Route::post('messages/conversations', [MessageController::class, 'createConversation']);
-    Route::get('messages/conversations/{conversation}', [MessageController::class, 'getConversation']);
-    Route::post('messages/conversations/{conversation}/send', [MessageController::class, 'sendMessage']);
-    Route::post('messages/conversations/{conversation}/mark-read', [MessageController::class, 'markAsRead']);
-    Route::post('messages/conversations/{conversation}/archive', [MessageController::class, 'archiveConversation']);
 
     // QA Dashboard and Reports (monitoring and viewing only)
     Route::get('qa/areas', [FacultyAreaContentController::class, 'qaAreas']);
@@ -204,7 +207,6 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('users', [UserController::class, 'index']);
     Route::get('program-chairs', [UserController::class, 'programChairs']);
     Route::get('area-in-charges', [UserController::class, 'areaInCharges']);
-    Route::get('message-recipients', [UserController::class, 'messageRecipients']);
     Route::get('program-faculty', [UserController::class, 'programFaculty']);
     Route::get('users/search', [UserController::class, 'search']);
 

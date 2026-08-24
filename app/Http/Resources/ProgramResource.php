@@ -50,6 +50,10 @@ class ProgramResource extends JsonResource
             'code' => $this->code,
             'chair' => $this->chair_name,
             'chairId' => $this->chair_id,
+            'activeCycleId' => $this->active_cycle_id,
+            'activeLevel' => $this->relationLoaded('activeCycle')
+                ? $this->activeCycle?->level
+                : $this->activeCycle?->level,
             'accreditationStatus' => $this->accreditation_status,
             'complianceScore' => $this->compliance_score,
             'collegeId' => $this->college_id,

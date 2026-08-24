@@ -6,8 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\AccreditationAreaResource;
 use App\Http\Resources\AreaMemberResource;
 use App\Models\AccreditationArea;
-use App\Models\AreaMember;
 use App\Models\AccreditationCycle;
+use App\Models\AreaMember;
+use App\Models\Program;
+use App\Models\Review;
+use App\Models\User;
+use App\Notifications\AreaInChargeAssignedNotification;
+use App\Services\AreaProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -130,12 +135,44 @@ class AccreditationAreaController extends Controller
         $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'chair_id' => ['required', 'exists:users,id'],
+            'confirm_reassign' => ['sometimes', 'boolean'],
         ]);
 
-        // A user cannot be both Area Chair and Member of the same area.
-        $accreditationArea->members()->where('user_id', $validated['chair_id'])->delete();
+        $accreditationArea->load('chair');
+        $newChairId = (int) $validated['chair_id'];
+        $currentChairId = $accreditationArea->chair_id ? (int) $accreditationArea->chair_id : null;
 
-        $accreditationArea->update(['chair_id' => $validated['chair_id']]);
+        if ($currentChairId && $currentChairId !== $newChairId && ! $request->boolean('confirm_reassign')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This area already has an Area In-Charge. Confirm to reassign.',
+                'data' => [
+                    'requiresConfirmation' => true,
+                    'currentChair' => $accreditationArea->chair ? [
+                        'id' => $accreditationArea->chair->id,
+                        'name' => $accreditationArea->chair->name,
+                        'email' => $accreditationArea->chair->email,
+                    ] : null,
+                ],
+            ], 409);
+        }
+
+        $assignee = User::findOrFail($newChairId);
+
+        $accreditationArea->members()->where('user_id', $newChairId)->delete();
+        $accreditationArea->update(['chair_id' => $newChairId]);
+
+        if (! $assignee->isAreaIncharge()) {
+            $assignee->assignRole('Area In-Charge');
+        }
+
+        if ($currentChairId !== $newChairId) {
+            $assignee->notify(new AreaInChargeAssignedNotification(
+                $accreditationArea->fresh(['cycle.program'])
+            ));
+        }
+
+        app(AreaProgressService::class)->refresh($accreditationArea->fresh());
 
         return response()->json([
             'success' => true,
@@ -379,57 +416,212 @@ class AccreditationAreaController extends Controller
     }
 
     /**
-     * List the 10 fixed AACCUP areas for the authenticated Program Chair.
+     * List Level I–IV folders for the authenticated Program Chair, with the
+     * 10 fixed AACCUP areas under each existing accreditation cycle.
      *
-     * Seeding is idempotent: the fixed areas for the program's latest
-     * accreditation cycle are created once if missing, and subsequent
-     * requests simply return the persisted rows with their current chair,
-     * members and deadline.
+     * Seeding is idempotent per cycle. Levels without a cycle are returned
+     * empty so all four levels stay browsable.
      */
     public function programChairAreas(Request $request)
     {
         $user = $request->user() ?? $request->user('api');
-        if (! $user || ! $user->isProgramChair()) {
-            abort(403, 'Only a Program Chair can manage area assignments.');
-        }
+        $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before managing area assignments.');
+        $cyclesByLevel = $program->accreditationCycles
+            ->sortByDesc('created_at')
+            ->unique('level')
+            ->values();
 
-        $programId = $user->getEffectiveProgramId();
-        if (! $programId) {
-            abort(422, 'You need a program assigned before managing area assignments.');
-        }
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel) {
+            $cycle = $cyclesByLevel->firstWhere('level', $levelName);
 
-        $cycle = AccreditationCycle::where('program_id', $programId)
-            ->orderByDesc('created_at')
-            ->first();
+            if (! $cycle) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => null,
+                    'cycleStatus' => null,
+                    'displayStatus' => 'Not Started',
+                    'assignedCount' => 0,
+                    'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
+                    'areas' => [],
+                ];
+            }
 
-        if (! $cycle) {
-            return response()->json(['success' => true, 'data' => []], 200);
-        }
+            $this->seedFixedAreas($cycle);
+            $areas = $cycle->areas()
+                ->with(['chair', 'members.user'])
+                ->whereNotNull('code')
+                ->orderBy('id')
+                ->get();
 
-        foreach (AccreditationArea::AACCUP_AREAS as $areaDef) {
-            AccreditationArea::firstOrCreate(
-                [
-                    'cycle_id' => $cycle->id,
-                    'code' => $areaDef['code'],
-                ],
-                [
-                    'name' => $areaDef['name'],
-                    'status' => 'Not Started',
-                ]
-            );
-        }
-
-        $areas = $cycle->areas()
-            ->with(['chair', 'members.user'])
-            ->whereNotNull('code')
-            ->orderBy('id')
-            ->get();
+            return [
+                'level' => $levelName,
+                'cycleId' => $cycle->id,
+                'cycleStatus' => $cycle->status,
+                'displayStatus' => $cycle->display_status,
+                'assignedCount' => $areas->whereNotNull('chair_id')->count(),
+                'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
+                'areas' => AccreditationAreaResource::collection($areas)->resolve(),
+            ];
+        });
 
         return response()->json([
             'success' => true,
             'message' => 'Accreditation areas retrieved successfully.',
-            'data' => AccreditationAreaResource::collection($areas),
+            'data' => [
+                'programId' => $program->id,
+                'programName' => $program->name,
+                'activeCycleId' => $program->active_cycle_id,
+                'activeLevel' => $program->activeCycle?->level,
+                'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+                'levels' => $levels->values(),
+            ],
         ], 200);
+    }
+
+    /**
+     * Level-first Area Documents tree for the authenticated Program Chair.
+     *
+     * Returns Level I–IV folders, the 10 AACCUP areas under each existing
+     * cycle, the assigned Area In-Charge, area/review status, and document
+     * counts. Documents themselves are loaded per area via GET /documents.
+     */
+    public function programChairAreaDocuments(Request $request)
+    {
+        $user = $request->user() ?? $request->user('api');
+        $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before browsing area documents.');
+        $cyclesByLevel = $program->accreditationCycles
+            ->sortByDesc('created_at')
+            ->unique('level')
+            ->values();
+
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $user) {
+            $cycle = $cyclesByLevel->firstWhere('level', $levelName);
+
+            if (! $cycle) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => null,
+                    'cycleStatus' => null,
+                    'displayStatus' => 'Not Started',
+                    'documentCount' => 0,
+                    'areas' => [],
+                ];
+            }
+
+            $this->seedFixedAreas($cycle);
+            $cycle->loadMissing('program');
+
+            $areas = $cycle->areas()
+                ->with(['chair', 'reviews' => fn ($q) => $q->latest()])
+                ->withCount('documents')
+                ->whereNotNull('code')
+                ->orderBy('id')
+                ->get();
+
+            return [
+                'level' => $levelName,
+                'cycleId' => $cycle->id,
+                'cycleStatus' => $cycle->status,
+                'displayStatus' => $cycle->display_status,
+                'documentCount' => $areas->sum('documents_count'),
+                'areas' => $areas->map(function (AccreditationArea $area) use ($user, $cycle) {
+                    $review = $area->reviews->first();
+                    if ($review) {
+                        $review->setRelation('area', $area);
+                        $review->setRelation('cycle', $cycle);
+                    }
+
+                    return [
+                        'id' => $area->id,
+                        'code' => $area->code,
+                        'name' => $area->name,
+                        'status' => $area->status,
+                        'documentCount' => (int) $area->documents_count,
+                        'chair' => $area->chair ? [
+                            'id' => $area->chair->id,
+                            'name' => $area->chair->name,
+                            'email' => $area->chair->email,
+                        ] : null,
+                        'review' => $this->serializeAreaReview($review, $user),
+                    ];
+                })->values(),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Area documents retrieved successfully.',
+            'data' => [
+                'programId' => $program->id,
+                'programName' => $program->name,
+                'activeCycleId' => $program->active_cycle_id,
+                'activeLevel' => $program->activeCycle?->level,
+                'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+                'levels' => $levels->values(),
+            ],
+        ], 200);
+    }
+
+    private function resolveVisibleProgram(Request $request, ?User $user, string $missingProgramMessage): Program
+    {
+        if (! $user) {
+            abort(403, 'You are not allowed to browse this program\'s areas.');
+        }
+
+        $canBrowse = $user->isProgramChair()
+            || $user->isFaculty()
+            || $user->isAreaIncharge()
+            || $user->isDean()
+            || $user->isQA()
+            || $user->isVPAA()
+            || $user->isSuperAdmin();
+
+        if (! $canBrowse) {
+            abort(403, 'You are not allowed to browse this program\'s areas.');
+        }
+
+        $requestedProgramId = $request->filled('program_id') ? (int) $request->input('program_id') : null;
+
+        if ($requestedProgramId && ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin())) {
+            return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+        }
+
+        if ($requestedProgramId && $user->isDean()) {
+            $program = Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+            abort_unless((int) $program->college_id === (int) $user->getEffectiveCollegeId(), 403, 'You are not allowed to browse this program\'s areas.');
+
+            return $program;
+        }
+
+        if ($requestedProgramId && $user->isProgramChair()) {
+            abort_unless($user->ownsAssignedProgram($requestedProgramId), 403, 'You are not allowed to browse this program\'s areas.');
+
+            return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+        }
+
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
+        if (! $programId) {
+            abort(422, $missingProgramMessage);
+        }
+
+        return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($programId);
+    }
+
+    private function serializeAreaReview(?Review $review, $user): ?array
+    {
+        if (! $review) {
+            return null;
+        }
+
+        return [
+            'id' => $review->id,
+            'currentStatus' => $review->current_status,
+            'expectedReviewerRole' => $review->getExpectedReviewerRole(),
+            'isTerminal' => $review->isTerminal(),
+            'submittedAt' => $review->submitted_at?->toDateTimeString(),
+            'canApprove' => $user->can('approve', $review),
+            'canRequestRevision' => $user->can('requestRevision', $review),
+        ];
     }
 
     /**
@@ -491,6 +683,22 @@ class AccreditationAreaController extends Controller
             'message' => 'Area members updated successfully.',
             'data' => new AccreditationAreaResource($accreditationArea->fresh('chair', 'members.user')),
         ], 200);
+    }
+
+    private function seedFixedAreas(AccreditationCycle $cycle): void
+    {
+        foreach (AccreditationArea::AACCUP_AREAS as $areaDef) {
+            AccreditationArea::firstOrCreate(
+                [
+                    'cycle_id' => $cycle->id,
+                    'code' => $areaDef['code'],
+                ],
+                [
+                    'name' => $areaDef['name'],
+                    'status' => 'Not Started',
+                ]
+            );
+        }
     }
 
     private function assertCanViewCycle($user, AccreditationCycle $cycle): void

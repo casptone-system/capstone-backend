@@ -43,6 +43,7 @@ class DocumentApiTest extends TestCase
         $this->area = AccreditationArea::factory()->create([
             'cycle_id' => $this->cycle->id,
             'name' => 'Area I: Vision, Mission, Goals',
+            'chair_id' => $this->user->id,
         ]);
         $this->task = Task::factory()->create([
             'area_id' => $this->area->id,
@@ -461,6 +462,37 @@ class DocumentApiTest extends TestCase
         $response->assertStatus(404);
     }
 
+    public function test_preview_streams_pdf_inline(): void
+    {
+        Storage::fake('local');
+
+        $filePath = 'documents/'.$this->document->id.'/v1/faculty-cv.pdf';
+        Storage::disk('local')->put($filePath, '%PDF-1.4 fake');
+        $this->document->versions()->first()->update(['file_path' => $filePath]);
+
+        $response = $this->get('/api/documents/'.$this->document->id.'/preview');
+
+        $response->assertStatus(200);
+        $this->assertStringContainsString('inline', (string) $response->headers->get('Content-Disposition'));
+        $this->assertStringContainsString('application/pdf', (string) $response->headers->get('Content-Type'));
+    }
+
+    public function test_preview_rejects_non_previewable_types(): void
+    {
+        Storage::fake('local');
+
+        $filePath = 'documents/'.$this->document->id.'/v1/bundle.zip';
+        Storage::disk('local')->put($filePath, 'PK zip');
+        $this->document->versions()->first()->update([
+            'file_path' => $filePath,
+            'original_name' => 'bundle.zip',
+            'mime_type' => 'application/zip',
+        ]);
+
+        $this->getJson('/api/documents/'.$this->document->id.'/preview')
+            ->assertStatus(415);
+    }
+
     public function test_unauthenticated_access_is_rejected(): void
     {
         auth()->forgetGuards();
@@ -468,5 +500,46 @@ class DocumentApiTest extends TestCase
         $response = $this->getJson('/api/documents');
 
         $response->assertStatus(401);
+    }
+
+    public function test_area_member_cannot_upload_to_an_area(): void
+    {
+        Storage::fake('local');
+
+        $member = User::factory()->create();
+        $member->assignRole('faculty');
+        \App\Models\AreaMember::create([
+            'area_id' => $this->area->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        Sanctum::actingAs($member);
+
+        $this->postJson('/api/documents', [
+            'program_id' => $this->program->id,
+            'area_id' => $this->area->id,
+            'title' => 'Member should be rejected',
+            'file' => UploadedFile::fake()->create('member.pdf', 100, 'application/pdf'),
+        ])->assertStatus(403);
+
+        $this->assertDatabaseMissing('documents', [
+            'title' => 'Member should be rejected',
+        ]);
+    }
+
+    public function test_faculty_can_upload_a_document_without_an_area(): void
+    {
+        Storage::fake('local');
+
+        $faculty = User::factory()->create();
+        $faculty->assignRole('faculty');
+        Sanctum::actingAs($faculty);
+
+        $this->postJson('/api/documents', [
+            'program_id' => $this->program->id,
+            'title' => 'Personal faculty upload',
+            'file' => UploadedFile::fake()->create('personal.pdf', 100, 'application/pdf'),
+        ])->assertStatus(201)->assertJsonPath('data.title', 'Personal faculty upload');
     }
 }

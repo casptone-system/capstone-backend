@@ -135,7 +135,7 @@ class AccreditationStructureController extends Controller
         }
 
         $accreditationArea->update(['chair_id' => $assignee->id]);
-        $assignee->notify(new AreaInChargeAssignedNotification($accreditationArea->fresh('cycle')));
+        $assignee->notify(new AreaInChargeAssignedNotification($accreditationArea->fresh(['cycle.program'])));
 
         return response()->json([
             'success' => true,

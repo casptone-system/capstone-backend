@@ -7,15 +7,18 @@ use App\Http\Resources\DocumentResource;
 use App\Http\Resources\DocumentVersionResource;
 use App\Models\AccreditationArea;
 use App\Models\Document;
-use App\Models\DocumentVersion;
 use App\Models\User;
 use App\Notifications\DocumentUploadedNotification;
+use App\Services\AreaProgressService;
+use App\Services\EvidenceStorage;
+use App\Support\AreaEvidenceGate;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 class DocumentController extends Controller
 {
+    public function __construct(private EvidenceStorage $evidenceStorage)
+    {
+    }
     /**
      * Display a paginated list of documents.
      */
@@ -27,17 +30,11 @@ class DocumentController extends Controller
 
         // Scope documents returned based on policy-like rules to avoid IDOR
         if (! $user->isSuperAdmin() && ! $user->isQA() && ! $user->isVPAA()) {
-            if ($user->isFaculty()) {
-                $query->where('uploaded_by', $user->id);
-            } elseif ($user->isAreaIncharge()) {
-                $areaIds = $user->assignedAreaIds()->toArray();
-                $query->whereIn('area_id', $areaIds);
-            } elseif ($user->isProgramChair()) {
-                $programId = $user->getEffectiveProgramId();
+            if ($user->isProgramChair()) {
+                $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
                 if ($programId) {
                     $query->where('program_id', $programId);
                 } else {
-                    // no effective program, return empty
                     $query->whereRaw('1 = 0');
                 }
             } elseif ($user->isDean()) {
@@ -47,8 +44,18 @@ class DocumentController extends Controller
                 } else {
                     $query->whereRaw('1 = 0');
                 }
+            } elseif ($user->isAreaIncharge()) {
+                $areaIds = $user->assignedAreaIds()->toArray();
+                $query->whereIn('area_id', $areaIds);
+            } elseif ($user->isFaculty()) {
+                $areaIds = $user->assignedAreaIds()->all();
+                $query->where(function ($scoped) use ($user, $areaIds) {
+                    $scoped->where('uploaded_by', $user->id);
+                    if ($areaIds !== []) {
+                        $scoped->orWhereIn('area_id', $areaIds);
+                    }
+                });
             } else {
-                // Other roles without broad access: restrict to uploaded_by
                 $query->where('uploaded_by', $user->id);
             }
         }
@@ -63,6 +70,10 @@ class DocumentController extends Controller
 
         if ($request->filled('task_id')) {
             $query->where('task_id', $request->task_id);
+        }
+
+        if ($request->filled('content_row_id')) {
+            $query->where('content_row_id', $request->content_row_id);
         }
 
         if ($request->filled('status')) {
@@ -100,11 +111,29 @@ class DocumentController extends Controller
             'program_id' => ['required', 'exists:programs,id'],
             'area_id' => ['nullable', 'exists:accreditation_areas,id'],
             'task_id' => ['nullable', 'exists:tasks,id'],
+            'content_row_id' => ['nullable', 'exists:parameter_content_rows,id'],
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'school_year' => ['nullable', 'string', 'max:20'],
-            'file' => ['required', 'file', 'max:51200'], // 50MB max
+            'file' => ['required', 'file', 'max:'.$this->evidenceStorage->documentUploadMaxKilobytes()],
         ]);
+
+        $area = AreaEvidenceGate::resolveArea(
+            isset($validated['area_id']) ? (int) $validated['area_id'] : null,
+            isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
+        );
+
+        if ($area) {
+            AreaEvidenceGate::assertCanUpload($request->user(), $area);
+            $validated['area_id'] = $area->id;
+            $cycleProgramId = $area->cycle()->value('program_id');
+            if ($cycleProgramId && (int) $cycleProgramId !== (int) $validated['program_id']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The selected area does not belong to the selected program.',
+                ], 422);
+            }
+        }
 
         $file = $request->file('file');
         $mimeType = $file->getMimeType();
@@ -121,7 +150,7 @@ class DocumentController extends Controller
 
         // Store the file
         $versionPath = "documents/{$document->id}/v1";
-        $filePath = $file->storeAs($versionPath, $originalName, 'local');
+        $filePath = $this->evidenceStorage->putFileAs($versionPath, $file, $originalName);
 
         // Create the version record
         $document->versions()->create([
@@ -135,6 +164,10 @@ class DocumentController extends Controller
 
         // Send Document Uploaded notification to area chair and members
         $this->notifyDocumentUploaded($document, $request->user());
+
+        if (! empty($document->content_row_id)) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+        }
 
         return response()->json([
             'success' => true,
@@ -189,11 +222,17 @@ class DocumentController extends Controller
     {
         $this->authorize('delete', $document);
 
+        $contentRowId = $document->content_row_id;
+
         // Delete all stored files
         $documentPath = "documents/{$document->id}";
-        Storage::disk('local')->deleteDirectory($documentPath);
+        $this->evidenceStorage->deleteDirectory($documentPath);
 
         $document->delete();
+
+        if ($contentRowId) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $contentRowId);
+        }
 
         return response()->json([
             'success' => true,
@@ -208,8 +247,13 @@ class DocumentController extends Controller
     {
         $this->authorize('replace', $document);
 
+        if ($document->area_id || $document->content_row_id) {
+            $area = $document->area ?: AreaEvidenceGate::resolveArea($document->area_id, $document->content_row_id);
+            AreaEvidenceGate::assertCanUpload($request->user(), $area);
+        }
+
         $validated = $request->validate([
-            'file' => ['required', 'file', 'max:51200'], // 50MB max
+            'file' => ['required', 'file', 'max:'.$this->evidenceStorage->documentUploadMaxKilobytes()],
         ]);
 
         $file = $request->file('file');
@@ -221,7 +265,7 @@ class DocumentController extends Controller
 
         // Store the new file
         $versionPath = "documents/{$document->id}/v{$newVersion}";
-        $filePath = $file->storeAs($versionPath, $originalName, 'local');
+        $filePath = $this->evidenceStorage->putFileAs($versionPath, $file, $originalName);
 
         // Create the version record
         $document->versions()->create([
@@ -271,14 +315,59 @@ class DocumentController extends Controller
 
         $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
 
-        if (!Storage::disk('local')->exists($version->file_path)) {
+        if (! $this->evidenceStorage->exists($version->file_path)) {
             return response()->json([
                 'success' => false,
                 'message' => 'File not found.',
             ], 404);
         }
 
-        return Storage::disk('local')->download($version->file_path, $version->original_name);
+        return $this->evidenceStorage->download($version->file_path, $version->original_name);
+    }
+
+    /**
+     * Stream a previewable version inline (PDF, image, audio, video).
+     */
+    public function preview(Request $request, Document $document)
+    {
+        $this->authorize('download', $document);
+
+        $versionNumber = $request->get('version', $document->current_version);
+        $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
+
+        if (! $this->isPreviewable($version->mime_type, $version->original_name)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This file type cannot be previewed in the browser.',
+            ], 415);
+        }
+
+        $response = $this->evidenceStorage->streamInline(
+            $version->file_path,
+            $version->original_name,
+            $version->mime_type
+        );
+
+        if ($response === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'File not found.',
+            ], 404);
+        }
+
+        return $response;
+    }
+
+    private function isPreviewable(?string $mimeType, ?string $fileName): bool
+    {
+        $mime = strtolower((string) $mimeType);
+        $extension = strtolower(pathinfo((string) $fileName, PATHINFO_EXTENSION));
+
+        return str_starts_with($mime, 'image/')
+            || str_starts_with($mime, 'video/')
+            || str_starts_with($mime, 'audio/')
+            || $mime === 'application/pdf'
+            || in_array($extension, ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mp3', 'wav', 'm4a'], true);
     }
 
     /**

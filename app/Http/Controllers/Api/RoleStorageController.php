@@ -4,17 +4,21 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Document;
-use App\Models\DocumentVersion;
 use App\Models\RoleStorageFile;
 use App\Models\RoleStorageFolder;
 use App\Models\Task;
+use App\Services\AreaProgressService;
+use App\Services\EvidenceStorage;
+use App\Support\AreaEvidenceGate;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class RoleStorageController extends Controller
 {
+    public function __construct(private EvidenceStorage $evidenceStorage)
+    {
+    }
     protected array $allowedMimeTypes = [
         'pdf' => ['application/pdf'],
         'doc' => ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -163,7 +167,7 @@ class RoleStorageController extends Controller
         abort_unless($folder->role === $this->normalizeRole((string) $request->query('role', $folder->role)), 403, 'Role mismatch.');
 
         $validated = $request->validate([
-            'file' => ['required', 'file', 'max:51200'],
+            'file' => ['required', 'file', 'max:'.$this->evidenceStorage->documentUploadMaxKilobytes()],
         ]);
 
         $file = $request->file('file');
@@ -181,7 +185,7 @@ class RoleStorageController extends Controller
 
         $storedName = Str::uuid()->toString() . '.' . ($extension ?: 'bin');
         $relativeDirectory = 'role-storage/' . $user->id . '/' . $folder->role . '/' . $folder->id;
-        $storedPath = Storage::disk('local')->putFileAs($relativeDirectory, $file, $storedName);
+        $storedPath = $this->evidenceStorage->putFileAs($relativeDirectory, $file, $storedName);
 
         $storageFile = RoleStorageFile::create([
             'user_id' => $user->id,
@@ -349,6 +353,7 @@ class RoleStorageController extends Controller
             'program_id' => ['required', 'exists:programs,id'],
             'area_id' => ['nullable', 'exists:accreditation_areas,id'],
             'task_id' => ['nullable', 'exists:tasks,id'],
+            'content_row_id' => ['nullable', 'exists:parameter_content_rows,id'],
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'school_year' => ['nullable', 'string', 'max:20'],
@@ -368,9 +373,13 @@ class RoleStorageController extends Controller
             $validated['area_id'] = $task->area_id;
         }
 
-        if (! empty($validated['area_id'])) {
-            $area = \App\Models\AccreditationArea::find($validated['area_id']);
-            abort_if(! $area, 404, 'Area not found.');
+        $area = AreaEvidenceGate::resolveArea(
+            isset($validated['area_id']) ? (int) $validated['area_id'] : null,
+            isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
+        );
+
+        if ($area) {
+            AreaEvidenceGate::assertCanUpload($request->user(), $area);
 
             if ((int) $area->cycle?->program_id !== (int) $validated['program_id']) {
                 return response()->json([
@@ -378,12 +387,15 @@ class RoleStorageController extends Controller
                     'message' => 'The selected area does not belong to the selected program.',
                 ], 422);
             }
+
+            $validated['area_id'] = $area->id;
         }
 
         $document = Document::create([
             'program_id' => $validated['program_id'],
             'area_id' => $validated['area_id'] ?? null,
             'task_id' => $validated['task_id'] ?? null,
+            'content_row_id' => $validated['content_row_id'] ?? null,
             'title' => $validated['title'],
             'description' => $validated['description'] ?? null,
             'school_year' => $validated['school_year'] ?? null,
@@ -404,6 +416,10 @@ class RoleStorageController extends Controller
         $file->status = 'evidence';
         $file->save();
 
+        if (! empty($document->content_row_id)) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Faculty file linked as accreditation evidence.',
@@ -422,23 +438,20 @@ class RoleStorageController extends Controller
 
         abort_unless($request->user()->id === $file->user_id, 403, 'You are not allowed to access this file.');
 
-        if (! Storage::disk('local')->exists($file->file_path)) {
+        $response = $this->evidenceStorage->streamInline(
+            $file->file_path,
+            $file->original_name ?: $file->name,
+            $file->mime_type
+        );
+
+        if ($response === null) {
             return response()->json([
                 'success' => false,
                 'message' => 'File not found.',
             ], 404);
         }
 
-        $mimeType = $file->mime_type ?: Storage::disk('local')->mimeType($file->file_path);
-
-        return response()->stream(function () use ($file) {
-            echo Storage::disk('local')->get($file->file_path);
-        }, 200, [
-            'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="' . $file->original_name . '"',
-            'Content-Length' => Storage::disk('local')->size($file->file_path),
-            'Cache-Control' => 'private, no-transform',
-        ]);
+        return $response;
     }
 
     public function destroyFile(Request $request, RoleStorageFile $file)
@@ -452,8 +465,8 @@ class RoleStorageController extends Controller
 
         abort_unless($request->user()->id === $file->user_id, 403, 'You are not allowed to delete this file.');
 
-        if ($file->file_path && Storage::disk('local')->exists($file->file_path)) {
-            Storage::disk('local')->delete($file->file_path);
+        if ($file->file_path) {
+            $this->evidenceStorage->delete($file->file_path);
         }
 
         $file->delete();

@@ -543,18 +543,6 @@ class UserController extends Controller
         return response()->json(['success' => true, 'data' => $members]);
     }
 
-    public function messageRecipients(Request $request)
-    {
-        $user = $request->user('api') ?? $request->user();
-        if (! $user) {
-            abort(401);
-        }
-
-        $recipients = app(\App\Services\AccreditationMessagingService::class)->contacts($user);
-
-        return response()->json(['success' => true, 'data' => $recipients['groups']]);
-    }
-
     public function programFaculty(Request $request)
     {
         $user = $request->user('api') ?? $request->user();

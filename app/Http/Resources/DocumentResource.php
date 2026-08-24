@@ -19,6 +19,7 @@ class DocumentResource extends JsonResource
             'programId' => $this->program_id,
             'areaId' => $this->area_id,
             'taskId' => $this->task_id,
+            'contentRowId' => $this->content_row_id,
             'title' => $this->title,
             'description' => $this->description,
             'schoolYear' => $this->school_year,

@@ -54,6 +54,8 @@ class AccreditationArea extends Model
         'chair_id',
         'deadline',
         'status',
+        'progress_percent',
+        'progress_computed_at',
     ];
 
     /**
@@ -66,6 +68,8 @@ class AccreditationArea extends Model
         return [
             'chair_id' => 'integer',
             'deadline' => 'datetime',
+            'progress_percent' => 'integer',
+            'progress_computed_at' => 'datetime',
         ];
     }
 

@@ -98,7 +98,7 @@ class AccreditationWorkspaceController extends Controller
         if (! $candidate->isAreaIncharge()) {
             $candidate->assignRole('Area In-Charge');
         }
-        $candidate->notify(new AreaInChargeAssignedNotification($area->fresh('cycle')));
+        $candidate->notify(new AreaInChargeAssignedNotification($area->fresh(['cycle.program'])));
 
         return response()->json([
             'success' => true,

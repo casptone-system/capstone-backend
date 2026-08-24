@@ -57,6 +57,7 @@ class Document extends Model
         'program_id',
         'area_id',
         'task_id',
+        'content_row_id',
         'title',
         'description',
         'school_year',
@@ -100,6 +101,14 @@ class Document extends Model
     public function task(): BelongsTo
     {
         return $this->belongsTo(Task::class, 'task_id');
+    }
+
+    /**
+     * Get the parameter content row this document is attached to.
+     */
+    public function contentRow(): BelongsTo
+    {
+        return $this->belongsTo(ParameterContentRow::class, 'content_row_id');
     }
 
     /**

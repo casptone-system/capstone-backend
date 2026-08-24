@@ -55,12 +55,32 @@ class AuditLogService
             return 'logout';
         }
 
+        if (preg_match('#reviews/\d+/approve#', $path)) {
+            return 'review_approved';
+        }
+
+        if (preg_match('#reviews/\d+/request-revision#', $path)) {
+            return 'review_revision_requested';
+        }
+
+        if (preg_match('#reviews/\d+/reject#', $path)) {
+            return 'review_rejected';
+        }
+
+        if (preg_match('#reviews/\d+/submit#', $path)) {
+            return 'review_submitted';
+        }
+
         if (str_contains($path, 'upload') || str_contains($path, 'replace')) {
             return 'upload';
         }
 
+        if ($request->isMethod('post') && preg_match('#documents$#', $path)) {
+            return 'document_uploaded';
+        }
+
         if ($request->isMethod('delete')) {
-            return 'delete';
+            return str_contains($path, 'documents') ? 'document_deleted' : 'delete';
         }
 
         if ($request->isMethod('put') || $request->isMethod('patch')) {

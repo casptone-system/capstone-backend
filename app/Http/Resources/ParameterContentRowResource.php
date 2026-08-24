@@ -10,6 +10,9 @@ class ParameterContentRowResource extends JsonResource
     public function toArray(Request $request): array
     {
         $status = $this->relationLoaded('status') ? $this->status : $this->status()->first();
+        $document = $this->relationLoaded('latestDocument')
+            ? $this->latestDocument
+            : $this->latestDocument()->with(['versions', 'uploader'])->first();
 
         return [
             'id' => $this->id,
@@ -21,6 +24,8 @@ class ParameterContentRowResource extends JsonResource
             'doneBy' => $status?->relationLoaded('doneBy') && $status->doneBy
                 ? new UserResource($status->doneBy)
                 : null,
+            'hasFile' => $document !== null,
+            'document' => $document ? new DocumentResource($document) : null,
             'updatedAt' => $this->updated_at?->toDateTimeString(),
         ];
     }

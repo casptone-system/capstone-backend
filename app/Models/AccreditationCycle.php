@@ -122,6 +122,17 @@ class AccreditationCycle extends Model
     }
 
     /**
+     * Dashboard-facing status derived from cycle status.
+     * Display-layer only — not stored in the database.
+     */
+    public const DISPLAY_STATUSES = [
+        'Accredited',
+        'In Progress',
+        'Not Started',
+        'Expired',
+    ];
+
+    /**
      * Get the readiness label derived from the status.
      */
     public function getReadinessAttribute(): string
@@ -134,6 +145,22 @@ class AccreditationCycle extends Model
             'Completed' => 'Completed',
             'Expired' => 'Expired',
             default => $this->status,
+        };
+    }
+
+    public function getDisplayStatusAttribute(): string
+    {
+        return self::mapDisplayStatus($this->status);
+    }
+
+    public static function mapDisplayStatus(?string $status): string
+    {
+        return match ($status) {
+            'Completed' => 'Accredited',
+            'Preparation', 'Internal Review', 'Ready' => 'In Progress',
+            'Expired' => 'Expired',
+            'Planning' => 'Not Started',
+            default => 'Not Started',
         };
     }
 }

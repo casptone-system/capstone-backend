@@ -23,6 +23,7 @@ class Program extends Model
         'code',
         'chair',
         'chair_id',
+        'active_cycle_id',
         'accreditation_status',
         'compliance_score',
         'accreditation_level',
@@ -92,5 +93,13 @@ class Program extends Model
     public function accreditationCycles(): HasMany
     {
         return $this->hasMany(AccreditationCycle::class);
+    }
+
+    /**
+     * Visibility/routing cycle Faculty and area members are locked to.
+     */
+    public function activeCycle(): BelongsTo
+    {
+        return $this->belongsTo(AccreditationCycle::class, 'active_cycle_id');
     }
 }

@@ -25,6 +25,7 @@ class DocumentFactory extends Factory
             'program_id' => Program::factory(),
             'area_id' => null,
             'task_id' => null,
+            'content_row_id' => null,
             'title' => fake()->sentence(5),
             'description' => fake()->paragraph(),
             'school_year' => fake()->randomElement(['2025-2026', '2026-2027', '2027-2028']),

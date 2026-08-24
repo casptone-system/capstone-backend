@@ -44,6 +44,8 @@ class AccreditationCycleResource extends JsonResource
             'forwardedAt' => $this->forwarded_at?->toDateTimeString(),
             'programChairId' => $this->program_chair_id,
             'readiness' => $this->readiness,
+            'displayStatus' => $this->display_status,
+            'display_status' => $this->display_status,
             'created_at' => $this->created_at?->toDateTimeString(),
             'updated_at' => $this->updated_at?->toDateTimeString(),
             'createdAt' => $this->created_at?->toDateTimeString(),

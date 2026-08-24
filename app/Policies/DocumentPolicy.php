@@ -13,24 +13,30 @@ class DocumentPolicy
             return true;
         }
 
-        if ($user->isFaculty()) {
-            return $document->uploaded_by === $user->id;
-        }
-
-        if ($user->isAreaIncharge()) {
-            return $user->isAssignedToArea($document->area);
+        if ($user->isQA() || $user->isVPAA()) {
+            return true;
         }
 
         if ($user->isProgramChair()) {
-            return $document->program_id === $user->getEffectiveProgramId();
+            $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
+
+            return $programId !== null && (int) $document->program_id === (int) $programId;
         }
 
         if ($user->isDean()) {
             return $document->program?->college_id === $user->getEffectiveCollegeId();
         }
 
-        if ($user->isQA() || $user->isVPAA()) {
+        if ($document->area && ($user->isFaculty() || $user->isAreaIncharge()) && $user->isAssignedToArea($document->area)) {
             return true;
+        }
+
+        if ($user->isFaculty()) {
+            return $document->uploaded_by === $user->id;
+        }
+
+        if ($user->isAreaIncharge()) {
+            return $document->area ? $user->isAssignedToArea($document->area) : false;
         }
 
         return false;
@@ -51,12 +57,18 @@ class DocumentPolicy
             return true;
         }
 
+        if ($document->area_id || $document->content_row_id) {
+            $area = $document->area ?: $document->contentRow?->parameter?->area;
+
+            return $user->isChairOfArea($area);
+        }
+
         if ($user->isFaculty()) {
             return $document->uploaded_by === $user->id;
         }
 
         if ($user->isAreaIncharge()) {
-            return $user->isAssignedToArea($document->area);
+            return $document->area ? $user->isAssignedToArea($document->area) : false;
         }
 
         if ($user->isProgramChair()) {

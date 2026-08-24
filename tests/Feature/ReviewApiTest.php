@@ -199,6 +199,11 @@ class ReviewApiTest extends TestCase
             'action' => 'approve',
             'role' => 'Area Chair',
         ]);
+
+        $this->assertDatabaseHas('audit_logs', [
+            'event' => 'review_approved',
+            'user_id' => $areaChair->id,
+        ]);
     }
 
     public function test_full_workflow_approval_path(): void
@@ -305,6 +310,11 @@ class ReviewApiTest extends TestCase
             'action' => 'revision_request',
             'role' => 'Area Chair',
             'comment' => 'Please update the documentation.',
+        ]);
+
+        $this->assertDatabaseHas('audit_logs', [
+            'event' => 'review_revision_requested',
+            'user_id' => $areaChair->id,
         ]);
     }
 

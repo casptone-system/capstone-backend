@@ -105,24 +105,6 @@ class User extends Authenticatable
     }
 
     /**
-     * Get conversations the user participates in
-     */
-    public function conversations()
-    {
-        return $this->belongsToMany(Conversation::class, 'conversation_participants')
-            ->withPivot('last_read_at', 'is_archived')
-            ->withTimestamps();
-    }
-
-    /**
-     * Get messages sent by the user
-     */
-    public function messagesSent(): HasMany
-    {
-        return $this->hasMany(Message::class, 'sender_id');
-    }
-
-    /**
      * Get storage files owned by the user
      */
     public function storageFiles(): HasMany
@@ -255,13 +237,31 @@ class User extends Authenticatable
 
     public function isAssignedToArea(AccreditationArea $area): bool
     {
-        if ($area->chair_id === $this->id) {
+        if ($this->isChairOfArea($area)) {
             return true;
         }
 
         return AreaMember::where('area_id', $area->id)
             ->where('user_id', $this->id)
             ->exists();
+    }
+
+    public function isChairOfArea(?AccreditationArea $area): bool
+    {
+        return $area !== null && (int) $area->chair_id === (int) $this->id;
+    }
+
+    /**
+     * Faculty / Area Chair / members are locked to the program's active cycle.
+     * QA, VPAA, Dean, Program Chair, and SuperAdmin keep seeing every level.
+     */
+    public function isLockedToProgramActiveLevel(): bool
+    {
+        if ($this->isSuperAdmin() || $this->isQA() || $this->isVPAA() || $this->isDean() || $this->isProgramChair()) {
+            return false;
+        }
+
+        return $this->isFaculty() || $this->isAreaIncharge();
     }
 
     public function assignedAreaIds()

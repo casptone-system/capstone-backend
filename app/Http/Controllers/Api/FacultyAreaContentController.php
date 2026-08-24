@@ -11,6 +11,7 @@ use App\Models\AccreditationParameter;
 use App\Models\ParameterContentRow;
 use App\Models\ParameterRowStatus;
 use App\Models\User;
+use App\Services\AreaProgressService;
 use App\Support\AreaParameterCatalog;
 use Illuminate\Http\Request;
 
@@ -28,10 +29,24 @@ class FacultyAreaContentController extends Controller
             ->orderBy('id')
             ->get();
 
+        if ($user->isLockedToProgramActiveLevel()) {
+            $areas = $areas->filter(function (AccreditationArea $area) {
+                $activeCycleId = $area->cycle?->program?->active_cycle_id;
+                if (! $activeCycleId) {
+                    return true;
+                }
+
+                return (int) $area->cycle_id === (int) $activeCycleId;
+            })->values();
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Assigned areas retrieved successfully.',
             'data' => MyAreaResource::collection($areas),
+            'meta' => [
+                'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+            ],
         ]);
     }
 
@@ -98,7 +113,9 @@ class FacultyAreaContentController extends Controller
 
         AreaParameterCatalog::ensureSeeded($parameter->area);
 
-        $rows = $parameter->contentRows()->with(['status.doneBy'])->get();
+        $rows = $parameter->contentRows()
+            ->with(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])
+            ->get();
 
         return response()->json([
             'success' => true,
@@ -124,10 +141,13 @@ class FacultyAreaContentController extends Controller
             'updated_by' => $request->user()->id,
         ]);
 
+        $parameter->loadMissing('area');
+        app(AreaProgressService::class)->refresh($parameter->area);
+
         return response()->json([
             'success' => true,
             'message' => 'Parameter content row created successfully.',
-            'data' => new ParameterContentRowResource($row->load('status.doneBy')),
+            'data' => new ParameterContentRowResource($row->load(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])),
         ], 201);
     }
 
@@ -152,6 +172,9 @@ class FacultyAreaContentController extends Controller
         );
 
         $parameterContentRow->setRelation('status', $status->load('doneBy'));
+        $parameterContentRow->loadMissing(['latestDocument.versions', 'latestDocument.uploader']);
+
+        app(AreaProgressService::class)->refresh($parameterContentRow->parameter?->area);
 
         return response()->json([
             'success' => true,
@@ -176,7 +199,27 @@ class FacultyAreaContentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Row content updated successfully.',
-            'data' => new ParameterContentRowResource($parameterContentRow->load('status.doneBy')),
+            'data' => new ParameterContentRowResource(
+                $parameterContentRow->load(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])
+            ),
+        ]);
+    }
+
+    public function destroyRow(Request $request, ParameterContentRow $parameterContentRow)
+    {
+        $this->assertCanEditContent($request->user());
+
+        $parameterContentRow->load('parameter.area');
+        $area = $parameterContentRow->parameter?->area;
+        $parameterContentRow->delete();
+
+        if ($area) {
+            app(AreaProgressService::class)->refresh($area);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Parameter content row deleted successfully.',
         ]);
     }
 

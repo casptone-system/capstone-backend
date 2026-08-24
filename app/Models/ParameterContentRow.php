@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ParameterContentRow extends Model
@@ -31,6 +32,16 @@ class ParameterContentRow extends Model
     public function status(): HasOne
     {
         return $this->hasOne(ParameterRowStatus::class, 'content_row_id');
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(Document::class, 'content_row_id');
+    }
+
+    public function latestDocument(): HasOne
+    {
+        return $this->hasOne(Document::class, 'content_row_id')->latestOfMany();
     }
 
     public function createdBy(): BelongsTo

@@ -8,8 +8,10 @@ use App\Models\AccreditationCycle;
 use App\Models\Program;
 use App\Models\User;
 use App\Notifications\AccreditationCycleNoticeNotification;
+use App\Services\AccreditationLevelStatusService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use InvalidArgumentException;
 
 class AccreditationCycleController extends Controller
 {
@@ -420,6 +422,25 @@ class AccreditationCycleController extends Controller
             'success' => true,
             'message' => 'Accreditation history retrieved successfully.',
             'data' => AccreditationCycleResource::collection($cycles),
+        ], 200);
+    }
+
+    /**
+     * Role-scoped Level I–IV accreditation status for dashboard homes.
+     * Includes every level per visible program, not only the latest cycle.
+     */
+    public function levelStatus(Request $request, AccreditationLevelStatusService $service)
+    {
+        try {
+            $programs = $service->forUser($request->user(), $request->query('view'));
+        } catch (InvalidArgumentException $e) {
+            abort(403, $e->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Accreditation level status retrieved successfully.',
+            'data' => $programs,
         ], 200);
     }
 

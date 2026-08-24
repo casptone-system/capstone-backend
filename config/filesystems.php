@@ -9,11 +9,33 @@ return [
     |
     | Here you may specify the default filesystem disk that should be used
     | by the framework. The "local" disk, as well as a variety of cloud
-    | based disks are available to your application for file storage.
+    | based disks are available for use when storing files.
     |
     */
 
     'default' => env('FILESYSTEM_DISK', 'local'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Evidence disk (documents + role-storage)
+    |--------------------------------------------------------------------------
+    |
+    | Accreditation evidence and role-vault files use this disk. Keep
+    | FILESYSTEM_DISK=local so profile photos (`public`) and Dean/instrument
+    | files (`private`) are unaffected. Set EVIDENCE_DISK=s3 to write those
+    | objects to Cloudflare R2.
+    |
+    */
+
+    'evidence_disk' => env('EVIDENCE_DISK', 'local'),
+
+    'document_upload_max_kb' => (int) env('DOCUMENT_UPLOAD_MAX_KB', 51200),
+
+    'media_upload_max_kb' => (int) env('MEDIA_UPLOAD_MAX_KB', 1048576),
+
+    'chunk_size_bytes' => (int) env('UPLOAD_CHUNK_SIZE_BYTES', 8 * 1024 * 1024),
+
+    'chunk_threshold_bytes' => (int) env('UPLOAD_CHUNK_THRESHOLD_BYTES', 50 * 1024 * 1024),
 
     /*
     |--------------------------------------------------------------------------
@@ -58,12 +80,15 @@ return [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),
-            'region' => env('AWS_DEFAULT_REGION'),
+            'region' => env('AWS_DEFAULT_REGION', 'auto'),
             'bucket' => env('AWS_BUCKET'),
             'url' => env('AWS_URL'),
-            'endpoint' => env('AWS_ENDPOINT'),
+            'endpoint' => env('AWS_ENDPOINT') ?: (env('R2_ACCOUNT_ID')
+                ? 'https://'.env('R2_ACCOUNT_ID').'.r2.cloudflarestorage.com'
+                : null),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
-            'throw' => false,
+            'visibility' => 'private',
+            'throw' => true,
             'report' => false,
         ],
 
