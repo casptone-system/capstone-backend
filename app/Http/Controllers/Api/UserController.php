@@ -586,16 +586,29 @@ class UserController extends Controller
             ->orderBy('name')
             ->get(['id', 'name', 'email', 'profile_photo', 'program_id']);
 
+        $payload = $faculty->map(fn (User $person) => [
+            'id' => $person->id,
+            'name' => $person->name,
+            'email' => $person->email,
+            'photo' => $person->profile_photo_url,
+            'profilePhoto' => $person->profile_photo_url,
+            'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
+        ])->values();
+
+        if (! $payload->contains(fn ($person) => (int) $person['id'] === (int) $user->id)) {
+            $payload = $payload->prepend([
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'photo' => $user->profile_photo_url,
+                'profilePhoto' => $user->profile_photo_url,
+                'role' => 'Program Chair',
+            ])->values();
+        }
+
         return response()->json([
             'success' => true,
-            'data' => $faculty->map(fn (User $person) => [
-                'id' => $person->id,
-                'name' => $person->name,
-                'email' => $person->email,
-                'photo' => $person->profile_photo_url,
-                'profilePhoto' => $person->profile_photo_url,
-                'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
-            ])->values(),
+            'data' => $payload,
         ]);
     }
 

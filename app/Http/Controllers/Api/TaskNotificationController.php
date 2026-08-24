@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\TaskNotification;
+use App\Models\TaskNotificationFile;
+use App\Models\TaskNotificationFileForward;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -133,22 +135,16 @@ class TaskNotificationController extends Controller
     /**
      * Mark a task as viewed (chair viewing the notification)
      */
-    public function markAsViewed(Request $request, TaskNotification $task): JsonResponse
+    public function markAsViewed(Request $request, TaskNotification $taskNotification): JsonResponse
     {
-        // Verify user is the assigned recipient
-        if ($task->assigned_to_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $this->assertRecipient($request, $taskNotification);
 
-        $task->markAsViewed();
+        $taskNotification->markAsViewed();
 
         return response()->json([
             'success' => true,
             'message' => 'Task marked as viewed',
-            'data' => $task,
+            'data' => $taskNotification,
             'badge_count' => TaskNotification::getActiveBadgeCount($request->user()),
         ]);
     }
@@ -156,39 +152,32 @@ class TaskNotificationController extends Controller
     /**
      * Mark a task as completed
      */
-    public function markAsCompleted(Request $request, TaskNotification $task): JsonResponse
+    public function markAsCompleted(Request $request, TaskNotification $taskNotification): JsonResponse
     {
-        // Verify user is the assigned recipient
-        if ($task->assigned_to_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $this->assertRecipient($request, $taskNotification);
 
-        $task->markAsCompleted();
+        $taskNotification->markAsCompleted();
 
         return response()->json([
             'success' => true,
             'message' => 'Task marked as completed',
-            'data' => $task,
+            'data' => $taskNotification,
         ]);
     }
 
     /**
      * Delete/dismiss a task notification
      */
-    public function dismiss(Request $request, TaskNotification $task): JsonResponse
+    public function dismiss(Request $request, string $taskNotification): JsonResponse
     {
-        // Verify user is the assigned recipient
-        if ($task->assigned_to_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $task = TaskNotification::query()
+            ->where('id', $taskNotification)
+            ->where('assigned_to_id', $request->user()->id)
+            ->first();
 
-        $task->update(['status' => 'dismissed']);
+        if ($task && $task->status !== 'dismissed') {
+            $task->update(['status' => 'dismissed']);
+        }
 
         return response()->json([
             'success' => true,
@@ -200,10 +189,9 @@ class TaskNotificationController extends Controller
     /**
      * Upload file to task notification
      */
-    public function uploadFile(Request $request, TaskNotification $task): JsonResponse
+    public function uploadFile(Request $request, TaskNotification $taskNotification): JsonResponse
     {
-        // Verify user is the task assigner (dean)
-        if ($task->assigned_by_id !== $request->user()->id) {
+        if ((int) $taskNotification->assigned_by_id !== (int) $request->user()->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Only the task assigner can upload files',
@@ -217,11 +205,11 @@ class TaskNotificationController extends Controller
         ]);
 
         $file = $request->file('file');
-        $folderPath = 'tasks/' . $task->id . '/files';
+        $folderPath = 'tasks/' . $taskNotification->id . '/files';
         $filePath = $file->store($folderPath, 'public');
 
         $taskFile = TaskNotificationFile::create([
-            'task_notification_id' => $task->id,
+            'task_notification_id' => $taskNotification->id,
             'file_name' => $file->getClientOriginalName(),
             'file_path' => $filePath,
             'mime_type' => $file->getMimeType(),
@@ -230,9 +218,8 @@ class TaskNotificationController extends Controller
             'description' => $validated['description'] ?? null,
         ]);
 
-        // Enable files if this is the first upload
-        if (!$task->files_enabled) {
-            $task->update([
+        if (! $taskNotification->files_enabled) {
+            $taskNotification->update([
                 'files_enabled' => true,
                 'file_folder_path' => $folderPath,
             ]);
@@ -248,26 +235,17 @@ class TaskNotificationController extends Controller
     /**
      * Download file from task notification
      */
-    public function downloadFile(Request $request, TaskNotification $task, TaskNotificationFile $file): JsonResponse
+    public function downloadFile(Request $request, TaskNotification $taskNotification, TaskNotificationFile $file): JsonResponse
     {
-        // Verify file belongs to task
-        if ($file->task_notification_id !== $task->id) {
+        if ((int) $file->task_notification_id !== (int) $taskNotification->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'File not found',
             ], 404);
         }
 
-        // Verify user is recipient or assigner
-        $user = $request->user();
-        if ($task->assigned_to_id !== $user->id && $task->assigned_by_id !== $user->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $this->assertParticipant($request, $taskNotification);
 
-        // Return download URL
         return response()->json([
             'success' => true,
             'download_url' => asset('storage/' . $file->file_path),
@@ -278,48 +256,38 @@ class TaskNotificationController extends Controller
     /**
      * Forward file to faculty member
      */
-    public function forwardFile(Request $request, TaskNotification $task, TaskNotificationFile $file): JsonResponse
+    public function forwardFile(Request $request, TaskNotification $taskNotification, TaskNotificationFile $file): JsonResponse
     {
-        // Verify file belongs to task
-        if ($file->task_notification_id !== $task->id) {
+        if ((int) $file->task_notification_id !== (int) $taskNotification->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'File not found',
             ], 404);
         }
 
-        // Verify user is recipient (program chair)
-        if ($task->assigned_to_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $this->assertRecipient($request, $taskNotification);
 
         $validated = $request->validate([
             'to_user_id' => 'required|exists:users,id',
             'message' => 'nullable|string|max:1000',
         ]);
 
-        // Verify recipient exists and is a faculty member
         $recipient = User::findOrFail($validated['to_user_id']);
-        if (!$recipient->isFaculty()) {
+        if (! $recipient->isFaculty()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Files can only be forwarded to faculty members',
             ], 422);
         }
 
-        // Create forward record
         $forward = TaskNotificationFileForward::create([
-            'task_notification_id' => $task->id,
+            'task_notification_id' => $taskNotification->id,
             'task_notification_file_id' => $file->id,
             'from_user_id' => $request->user()->id,
             'to_user_id' => $validated['to_user_id'],
             'message' => $validated['message'] ?? null,
         ]);
 
-        // Create notification for recipient
         TaskNotification::create([
             'assigned_by_id' => $request->user()->id,
             'assigned_to_id' => $validated['to_user_id'],
@@ -340,18 +308,11 @@ class TaskNotificationController extends Controller
     /**
      * Get all files for a task
      */
-    public function getFiles(Request $request, TaskNotification $task): JsonResponse
+    public function getFiles(Request $request, TaskNotification $taskNotification): JsonResponse
     {
-        // Verify user is recipient or assigner
-        $user = $request->user();
-        if ($task->assigned_to_id !== $user->id && $task->assigned_by_id !== $user->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized',
-            ], 403);
-        }
+        $this->assertParticipant($request, $taskNotification);
 
-        $files = $task->files()
+        $files = $taskNotification->files()
             ->with('forwards.toUser:id,name,email')
             ->get();
 
@@ -360,5 +321,26 @@ class TaskNotificationController extends Controller
             'data' => $files,
             'count' => $files->count(),
         ]);
+    }
+
+    private function assertRecipient(Request $request, TaskNotification $taskNotification): void
+    {
+        if ((int) $taskNotification->assigned_to_id !== (int) $request->user()->id) {
+            abort(response()->json([
+                'success' => false,
+                'message' => 'Unauthorized',
+            ], 403));
+        }
+    }
+
+    private function assertParticipant(Request $request, TaskNotification $taskNotification): void
+    {
+        $userId = (int) $request->user()->id;
+        if ((int) $taskNotification->assigned_to_id !== $userId && (int) $taskNotification->assigned_by_id !== $userId) {
+            abort(response()->json([
+                'success' => false,
+                'message' => 'Unauthorized',
+            ], 403));
+        }
     }
 }

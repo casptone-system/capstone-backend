@@ -20,7 +20,14 @@ class DocumentPolicy
         if ($user->isProgramChair()) {
             $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
 
-            return $programId !== null && (int) $document->program_id === (int) $programId;
+            if ($programId !== null && (int) $document->program_id === (int) $programId) {
+                return true;
+            }
+
+            $area = $document->area ?: $document->contentRow?->parameter?->area;
+            $areaProgramId = $area?->cycle?->program_id ?? $area?->cycle()->value('program_id');
+
+            return $areaProgramId !== null && (int) $areaProgramId === (int) $programId;
         }
 
         if ($user->isDean()) {
@@ -60,7 +67,7 @@ class DocumentPolicy
         if ($document->area_id || $document->content_row_id) {
             $area = $document->area ?: $document->contentRow?->parameter?->area;
 
-            return $user->isChairOfArea($area);
+            return $user->isAssignedToArea($area);
         }
 
         if ($user->isFaculty()) {

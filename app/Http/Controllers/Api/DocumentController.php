@@ -33,7 +33,7 @@ class DocumentController extends Controller
             if ($user->isProgramChair()) {
                 $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
                 if ($programId) {
-                    $query->where('program_id', $programId);
+                    $query->forProgram((int) $programId);
                 } else {
                     $query->whereRaw('1 = 0');
                 }
@@ -46,13 +46,17 @@ class DocumentController extends Controller
                 }
             } elseif ($user->isAreaIncharge()) {
                 $areaIds = $user->assignedAreaIds()->toArray();
-                $query->whereIn('area_id', $areaIds);
+                $query->where(function ($scoped) use ($areaIds) {
+                    $scoped->whereIn('area_id', $areaIds)
+                        ->orWhereHas('contentRow.parameter', fn ($parameter) => $parameter->whereIn('area_id', $areaIds));
+                });
             } elseif ($user->isFaculty()) {
                 $areaIds = $user->assignedAreaIds()->all();
                 $query->where(function ($scoped) use ($user, $areaIds) {
                     $scoped->where('uploaded_by', $user->id);
                     if ($areaIds !== []) {
-                        $scoped->orWhereIn('area_id', $areaIds);
+                        $scoped->orWhereIn('area_id', $areaIds)
+                            ->orWhereHas('contentRow.parameter', fn ($parameter) => $parameter->whereIn('area_id', $areaIds));
                     }
                 });
             } else {
@@ -61,11 +65,11 @@ class DocumentController extends Controller
         }
 
         if ($request->filled('program_id')) {
-            $query->where('program_id', $request->program_id);
+            $query->forProgram((int) $request->program_id);
         }
 
         if ($request->filled('area_id')) {
-            $query->where('area_id', $request->area_id);
+            $query->forArea((int) $request->area_id);
         }
 
         if ($request->filled('task_id')) {
@@ -96,7 +100,13 @@ class DocumentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Documents retrieved successfully.',
-            'data' => DocumentResource::collection($documents),
+            'data' => DocumentResource::collection($documents->getCollection())->toArray($request),
+            'meta' => [
+                'current_page' => $documents->currentPage(),
+                'last_page' => $documents->lastPage(),
+                'per_page' => $documents->perPage(),
+                'total' => $documents->total(),
+            ],
         ], 200);
     }
 

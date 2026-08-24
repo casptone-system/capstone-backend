@@ -37,6 +37,7 @@ class ProgramChairAssignedNotification extends Notification
             'message' => 'You have been assigned as Program Chair for ' . $this->program->name,
             'program_id' => $this->program->id,
             'assigned_by' => $this->assignedBy?->email ?? null,
+            'action_url' => '/user/dashboard/program-chair',
         ];
     }
 }

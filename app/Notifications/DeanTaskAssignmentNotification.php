@@ -3,11 +3,10 @@
 namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class DeanTaskAssignmentNotification extends Notification implements ShouldQueue
+class DeanTaskAssignmentNotification extends Notification
 {
     use Queueable;
 
@@ -23,17 +22,35 @@ class DeanTaskAssignmentNotification extends Notification implements ShouldQueue
         return ['database', 'mail'];
     }
 
-    public function toDatabase(object $notifiable): array
+    public function toArray(object $notifiable): array
     {
+        $programName = $this->data['program_name'] ?? 'your program';
+        $deanName = $this->data['dean_name'] ?? 'The Dean';
+        $description = trim((string) ($this->data['description'] ?? ''));
+        $fileName = $this->data['instrument_file_name'] ?? null;
+
+        $message = "{$deanName} assigned accreditation work for {$programName}.";
+        if (! empty($this->data['academic_year'])) {
+            $message .= " Academic year: {$this->data['academic_year']}.";
+        }
+        if ($fileName) {
+            $message .= " Attached instrument: {$fileName}.";
+        }
+        if ($description !== '') {
+            $message .= " {$description}";
+        }
+
         return [
             'type' => 'dean_task_assignment',
-            'dean_name' => $this->data['dean_name'],
-            'program_name' => $this->data['program_name'],
+            'title' => "Accreditation task from {$deanName}",
+            'message' => $message,
+            'dean_name' => $deanName,
+            'program_name' => $programName,
             'instrument_file_path' => $this->data['instrument_file_path'] ?? null,
-            'instrument_file_name' => $this->data['instrument_file_name'] ?? null,
-            'academic_year' => $this->data['academic_year'],
-            'description' => $this->data['description'],
-            'action_url' => '/user/dashboard/program-chair',
+            'instrument_file_name' => $fileName,
+            'academic_year' => $this->data['academic_year'] ?? null,
+            'description' => $description,
+            'action_url' => '/user/dashboard/program-chair?section=notifications',
         ];
     }
 
@@ -45,11 +62,11 @@ class DeanTaskAssignmentNotification extends Notification implements ShouldQueue
             ->line("The Dean has assigned you accreditation tasks for the **{$this->data['program_name']}** program.")
             ->line("**Academic Year:** {$this->data['academic_year']}");
 
-        if (!empty($this->data['instrument_file_name'])) {
+        if (! empty($this->data['instrument_file_name'])) {
             $mail->line("**Attached Instrument:** {$this->data['instrument_file_name']}");
         }
 
-        if (!empty($this->data['description'])) {
+        if (! empty($this->data['description'])) {
             $mail->line("**Additional Details:** {$this->data['description']}");
         }
 

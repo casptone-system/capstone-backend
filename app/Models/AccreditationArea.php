@@ -138,10 +138,20 @@ class AccreditationArea extends Model
 
     public function sidebarLabel(): string
     {
+        $number = null;
         if (is_string($this->code) && preg_match('/area-(\d+)/i', $this->code, $matches)) {
-            return 'AREA '.$matches[1];
+            $number = $matches[1];
         }
 
-        return strtoupper((string) ($this->name ?: 'AREA'));
+        $prettyName = trim((string) preg_replace('/^area\s*\d+\s*[–\-—:]\s*/iu', '', (string) $this->name));
+        if ($prettyName === '') {
+            $prettyName = trim((string) $this->name);
+        }
+
+        if ($number) {
+            return $prettyName !== '' ? "AREA {$number} ({$prettyName})" : "AREA {$number}";
+        }
+
+        return strtoupper($prettyName !== '' ? $prettyName : 'AREA');
     }
 }

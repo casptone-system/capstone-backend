@@ -10,14 +10,18 @@ use App\Models\AccreditationWorkspace;
 use App\Models\AreaMember;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
+use App\Support\AreaAssignmentNotifier;
 use App\Services\AccreditationWorkspaceService;
+use App\Services\EvidenceStorage;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AccreditationWorkspaceController extends Controller
 {
-    public function __construct(private AccreditationWorkspaceService $workspaces)
-    {
+    public function __construct(
+        private AccreditationWorkspaceService $workspaces,
+        private EvidenceStorage $evidenceStorage
+    ) {
     }
 
     public function index(Request $request)
@@ -90,7 +94,14 @@ class AccreditationWorkspaceController extends Controller
         ]);
 
         $candidate = User::findOrFail($validated['chair_id']);
-        if (! $candidate->belongsToProgram((int) $workspace->program_id) || (! $candidate->isFaculty() && ! $candidate->isAreaIncharge())) {
+        $programId = (int) $workspace->program_id;
+        $isProgramChairAssignee = $candidate->ownsAssignedProgram($programId);
+
+        if (! $candidate->belongsToProgram($programId) && ! $isProgramChairAssignee) {
+            abort(422, 'The selected user does not belong to this program.');
+        }
+
+        if (! $isProgramChairAssignee && ! $candidate->isFaculty() && ! $candidate->isAreaIncharge()) {
             abort(422, 'Select a faculty member from this program.');
         }
 
@@ -117,7 +128,8 @@ class AccreditationWorkspaceController extends Controller
         ]);
 
         $candidate = User::findOrFail($validated['user_id']);
-        if (! $candidate->belongsToProgram((int) $workspace->program_id)) {
+        $programId = (int) $workspace->program_id;
+        if (! $candidate->belongsToProgram($programId) && ! $candidate->ownsAssignedProgram($programId)) {
             abort(422, 'The selected user does not belong to this program.');
         }
 
@@ -129,6 +141,8 @@ class AccreditationWorkspaceController extends Controller
             'user_id' => $candidate->id,
             'role' => 'member',
         ]);
+
+        AreaAssignmentNotifier::notifyMember($candidate, $area->fresh(['cycle.program']), $request->user());
 
         return response()->json([
             'success' => true,
@@ -234,14 +248,48 @@ class AccreditationWorkspaceController extends Controller
         ]);
     }
 
-    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence): StreamedResponse
+    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence): StreamedResponse|\Illuminate\Http\JsonResponse
     {
         $this->assertCanView($request->user(), $workspace);
         $record = \App\Models\CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
 
-        return response()->streamDownload(function () use ($record) {
-            echo \Illuminate\Support\Facades\Storage::disk('private')->get($record->file_path);
-        }, $record->original_name);
+        $download = $this->evidenceStorage->download($record->file_path, $record->original_name);
+        if ($download) {
+            return $download;
+        }
+
+        $stream = $this->evidenceStorage->streamInline($record->file_path, $record->original_name, $record->mime_type);
+        if ($stream) {
+            $stream->headers->set('Content-Disposition', 'attachment; filename="'.$record->original_name.'"');
+
+            return $stream;
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'The file could not be found.',
+        ], 404);
+    }
+
+    public function previewEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence)
+    {
+        $this->assertCanView($request->user(), $workspace);
+        $record = \App\Models\CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
+
+        $stream = $this->evidenceStorage->streamInline(
+            $record->file_path,
+            $record->original_name,
+            $record->mime_type
+        );
+
+        if ($stream) {
+            return $stream;
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Preview is not available for this file.',
+        ], 404);
     }
 
     private function assertProgramChairOwns(User $user, AccreditationWorkspace $workspace): void

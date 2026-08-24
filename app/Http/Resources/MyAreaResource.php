@@ -10,7 +10,11 @@ class MyAreaResource extends JsonResource
     public function toArray(Request $request): array
     {
         $user = $request->user();
-        $assignmentRole = (int) $this->chair_id === (int) $user?->id ? 'chair' : 'member';
+        $isChair = $user && (int) $this->chair_id === (int) $user->id;
+        $isMember = $user && $this->relationLoaded('members')
+            ? $this->members->contains(fn ($member) => (int) $member->user_id === (int) $user->id)
+            : (bool) $user?->isAssignedToArea($this->resource);
+        $assignmentRole = $isChair ? 'chair' : ($isMember ? 'member' : null);
 
         return [
             'id' => $this->id,
@@ -22,7 +26,7 @@ class MyAreaResource extends JsonResource
             'status' => $this->status,
             'deadline' => $this->deadline?->toDateTimeString(),
             'assignmentRole' => $assignmentRole,
-            'canUpload' => $assignmentRole === 'chair',
+            'canUpload' => true,
             'progressPercent' => (int) ($this->progress_percent ?? 0),
             'chair' => $this->whenLoaded('chair', fn () => $this->chair ? new UserResource($this->chair) : null),
             'cycle' => $this->whenLoaded('cycle', fn () => new AccreditationCycleResource($this->cycle)),

@@ -22,12 +22,14 @@ class FacultyAreaContentController extends Controller
         $user = $request->user();
         $areaIds = $user->assignedAreaIds();
 
-        $areas = AccreditationArea::with(['chair', 'cycle.program'])
+        $areas = AccreditationArea::with(['chair', 'cycle.program', 'members'])
             ->whereIn('id', $areaIds)
-            ->orderByRaw("CASE WHEN code IS NULL THEN 1 ELSE 0 END")
+            ->whereNotNull('code')
             ->orderBy('code')
             ->orderBy('id')
-            ->get();
+            ->get()
+            ->filter(fn (AccreditationArea $area) => $user->isAssignedToArea($area))
+            ->values();
 
         if ($user->isLockedToProgramActiveLevel()) {
             $areas = $areas->filter(function (AccreditationArea $area) {

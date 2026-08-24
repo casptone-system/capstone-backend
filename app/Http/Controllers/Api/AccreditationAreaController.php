@@ -5,19 +5,27 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AccreditationAreaResource;
 use App\Http\Resources\AreaMemberResource;
+use App\Http\Resources\DocumentResource;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
 use App\Models\AreaMember;
+use App\Models\CriterionEvidence;
+use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
+use App\Support\AreaAssignmentNotifier;
 use App\Services\AreaProgressService;
+use App\Services\EvidenceStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AccreditationAreaController extends Controller
 {
+    public function __construct(private EvidenceStorage $evidenceStorage)
+    {
+    }
     /**
      * Display a paginated list of accreditation areas for a cycle.
      */
@@ -227,17 +235,15 @@ class AccreditationAreaController extends Controller
 
         $member->load('user');
 
-        // Send notification to faculty
         $faculty = $member->user;
         if ($faculty) {
-            $programChair = $request->user();
-            $faculty->notify(new \App\Notifications\FacultyAreaAssignmentNotification([
-                'program_chair_name' => $programChair->name,
-                'program_name' => $accreditationArea->cycle->program->name,
-                'area_name' => $accreditationArea->name,
-                'deadline' => $validated['deadline'] ?? now()->addDays(30)->format('Y-m-d'),
-                'instructions' => $validated['instructions'] ?? '',
-            ]));
+            AreaAssignmentNotifier::notifyMember(
+                $faculty,
+                $accreditationArea,
+                $request->user(),
+                $validated['deadline'] ?? null,
+                $validated['instructions'] ?? null,
+            );
 
             // Log activity
             \App\Models\AuditLog::create([
@@ -324,60 +330,64 @@ class AccreditationAreaController extends Controller
         ]);
 
         try {
-            $area = AccreditationArea::findOrFail($validated['area_id']);
+            $area = AccreditationArea::with('cycle.program.chairUser')->findOrFail($validated['area_id']);
 
-            // Verify faculty is assigned to this area
-            if (! $area->members()->where('user_id', $user->id)->exists()) {
+            if (! $user->isAssignedToArea($area)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'You are not assigned to this area.',
                 ], 403);
             }
 
-            // Store uploaded files
-            $storedFiles = [];
-            if ($request->hasFile('files')) {
-                foreach ($request->file('files') as $file) {
-                    $path = $file->store("accreditation/area-{$area->id}/submissions", 'private');
-                    $storedFiles[] = [
-                        'original_name' => $file->getClientOriginalName(),
-                        'file_path' => $path,
-                        'file_size' => $file->getSize(),
-                        'uploaded_by' => $user->id,
-                        'uploaded_at' => now(),
-                    ];
-                }
+            $programId = $area->cycle?->program_id;
+            if (! $programId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This area is not linked to a program.',
+                ], 422);
             }
 
-            // Create submission record
-            $submission = DB::table('area_submissions')->insert([
-                'area_id' => $area->id,
-                'user_id' => $user->id,
-                'notes' => $validated['notes'],
-                'status' => 'Pending Review',
-                'submitted_at' => now(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            $storedDocuments = [];
+            foreach ($request->file('files', []) as $file) {
+                $document = Document::create([
+                    'program_id' => $programId,
+                    'area_id' => $area->id,
+                    'title' => $file->getClientOriginalName(),
+                    'description' => $validated['notes'] ?? null,
+                    'uploaded_by' => $user->id,
+                    'current_version' => 1,
+                    'status' => 'Active',
+                ]);
 
-            // Store individual files
-            foreach ($storedFiles as $file) {
-                DB::table('area_submission_files')->insert($file);
+                $filePath = $this->evidenceStorage->putFileAs(
+                    "documents/{$document->id}/v1",
+                    $file,
+                    $file->getClientOriginalName()
+                );
+
+                $document->versions()->create([
+                    'version' => 1,
+                    'file_path' => $filePath,
+                    'original_name' => $file->getClientOriginalName(),
+                    'mime_type' => $file->getMimeType(),
+                    'file_size' => $file->getSize(),
+                    'uploaded_by' => $user->id,
+                ]);
+
+                $storedDocuments[] = $document;
             }
 
-            // Notify program chair
-            $programChair = $area->cycle->program->chairUser;
+            $programChair = $area->cycle?->program?->chairUser;
             if ($programChair) {
                 $programChair->notify(new \App\Notifications\FacultySubmissionNotification([
                     'faculty_name' => $user->name,
                     'area_name' => $area->name,
                     'program_name' => $area->cycle->program->name,
-                    'file_count' => count($storedFiles),
+                    'file_count' => count($storedDocuments),
                     'submitted_at' => now()->toDateTimeString(),
                 ]));
             }
 
-            // Log activity
             \App\Models\AuditLog::create([
                 'user_id' => $user->id,
                 'action' => 'submit_area_files',
@@ -385,7 +395,7 @@ class AccreditationAreaController extends Controller
                 'model_id' => $area->id,
                 'details' => [
                     'area_name' => $area->name,
-                    'file_count' => count($storedFiles),
+                    'file_count' => count($storedDocuments),
                     'notes' => substr($validated['notes'] ?? '', 0, 100),
                 ],
             ]);
@@ -396,7 +406,7 @@ class AccreditationAreaController extends Controller
                 'data' => [
                     'area_id' => $area->id,
                     'submitted_at' => now()->toIso8601String(),
-                    'file_count' => count($storedFiles),
+                    'file_count' => count($storedDocuments),
                     'status' => 'Pending Review',
                 ],
                 'submission' => true,
@@ -483,7 +493,7 @@ class AccreditationAreaController extends Controller
      *
      * Returns Level I–IV folders, the 10 AACCUP areas under each existing
      * cycle, the assigned Area In-Charge, area/review status, and document
-     * counts. Documents themselves are loaded per area via GET /documents.
+     * counts. File lists are loaded per area via GET /program-chair/areas/{area}/documents.
      */
     public function programChairAreaDocuments(Request $request)
     {
@@ -513,30 +523,50 @@ class AccreditationAreaController extends Controller
 
             $areas = $cycle->areas()
                 ->with(['chair', 'reviews' => fn ($q) => $q->latest()])
-                ->withCount('documents')
                 ->whereNotNull('code')
                 ->orderBy('id')
                 ->get();
+
+            $areaIds = $areas->pluck('id');
+            $documentCounts = Document::query()
+                ->where(function ($query) use ($areaIds) {
+                    $query->whereIn('area_id', $areaIds)
+                        ->orWhereHas('contentRow.parameter', fn ($parameter) => $parameter->whereIn('area_id', $areaIds));
+                })
+                ->with('contentRow.parameter')
+                ->get(['id', 'area_id', 'content_row_id'])
+                ->groupBy(function (Document $document) {
+                    return (int) ($document->area_id ?: $document->contentRow?->parameter?->area_id);
+                })
+                ->map->count();
+
+            $evidenceCounts = CriterionEvidence::query()
+                ->whereIn('area_id', $areaIds)
+                ->selectRaw('area_id, COUNT(*) as aggregate')
+                ->groupBy('area_id')
+                ->pluck('aggregate', 'area_id');
 
             return [
                 'level' => $levelName,
                 'cycleId' => $cycle->id,
                 'cycleStatus' => $cycle->status,
                 'displayStatus' => $cycle->display_status,
-                'documentCount' => $areas->sum('documents_count'),
-                'areas' => $areas->map(function (AccreditationArea $area) use ($user, $cycle) {
+                'documentCount' => (int) $documentCounts->sum() + (int) $evidenceCounts->sum(),
+                'areas' => $areas->map(function (AccreditationArea $area) use ($user, $cycle, $documentCounts, $evidenceCounts) {
                     $review = $area->reviews->first();
                     if ($review) {
                         $review->setRelation('area', $area);
                         $review->setRelation('cycle', $cycle);
                     }
 
+                    $documentCount = (int) ($documentCounts[$area->id] ?? 0) + (int) ($evidenceCounts[$area->id] ?? 0);
+
                     return [
                         'id' => $area->id,
                         'code' => $area->code,
                         'name' => $area->name,
                         'status' => $area->status,
-                        'documentCount' => (int) $area->documents_count,
+                        'documentCount' => $documentCount,
                         'chair' => $area->chair ? [
                             'id' => $area->chair->id,
                             'name' => $area->chair->name,
@@ -559,6 +589,82 @@ class AccreditationAreaController extends Controller
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
                 'levels' => $levels->values(),
             ],
+        ], 200);
+    }
+
+    /**
+     * Flat file list for one area: parameter-row documents, area uploads, and workspace evidence.
+     */
+    public function programChairAreaDocumentFiles(Request $request, AccreditationArea $accreditationArea)
+    {
+        $user = $request->user() ?? $request->user('api');
+        $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before browsing area documents.');
+        $accreditationArea->loadMissing('cycle');
+
+        abort_unless(
+            (int) $accreditationArea->cycle?->program_id === (int) $program->id,
+            403,
+            'You are not allowed to browse this area\'s documents.'
+        );
+
+        $documents = Document::with('program', 'area', 'task', 'uploader', 'versions')
+            ->forArea($accreditationArea->id)
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(function (Document $document) use ($request) {
+                $payload = (new DocumentResource($document))->toArray($request);
+                $payload['source'] = 'document';
+                $payload['workspaceId'] = null;
+
+                return $payload;
+            });
+
+        $evidence = CriterionEvidence::with('uploader')
+            ->where('area_id', $accreditationArea->id)
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(function (CriterionEvidence $item) {
+                return [
+                    'id' => $item->id,
+                    'source' => 'criterion-evidence',
+                    'workspaceId' => $item->workspace_id,
+                    'programId' => null,
+                    'areaId' => $item->area_id,
+                    'title' => $item->original_name,
+                    'description' => null,
+                    'uploadedBy' => $item->uploaded_by,
+                    'currentVersion' => 1,
+                    'status' => $item->is_done ? 'Active' : 'Draft',
+                    'createdAt' => $item->created_at?->toDateTimeString(),
+                    'updatedAt' => $item->updated_at?->toDateTimeString(),
+                    'uploader' => $item->uploader ? [
+                        'id' => $item->uploader->id,
+                        'name' => $item->uploader->name,
+                        'email' => $item->uploader->email,
+                    ] : null,
+                    'versions' => [[
+                        'id' => $item->id,
+                        'version' => 1,
+                        'originalName' => $item->original_name,
+                        'mimeType' => $item->mime_type,
+                        'fileSize' => $item->file_size,
+                        'createdAt' => $item->created_at?->toDateTimeString(),
+                    ]],
+                    'latestVersion' => [
+                        'id' => $item->id,
+                        'version' => 1,
+                        'originalName' => $item->original_name,
+                        'mimeType' => $item->mime_type,
+                        'fileSize' => $item->file_size,
+                        'createdAt' => $item->created_at?->toDateTimeString(),
+                    ],
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Area files retrieved successfully.',
+            'data' => $documents->concat($evidence)->sortByDesc('createdAt')->values(),
         ], 200);
     }
 
@@ -658,6 +764,7 @@ class AccreditationAreaController extends Controller
         ]);
 
         $chairId = $accreditationArea->chair_id;
+        $previousIds = $accreditationArea->members()->pluck('user_id')->map(fn ($id) => (int) $id)->all();
 
         $userIds = collect($validated['user_ids'])
             ->map(fn ($id) => (int) $id)
@@ -677,6 +784,15 @@ class AccreditationAreaController extends Controller
                 ]);
             }
         });
+
+        $newMemberIds = array_values(array_diff($userIds, $previousIds));
+        if ($newMemberIds !== []) {
+            $accreditationArea->loadMissing('cycle.program');
+            $assignedBy = $request->user();
+            User::whereIn('id', $newMemberIds)->get()->each(function (User $faculty) use ($accreditationArea, $assignedBy) {
+                AreaAssignmentNotifier::notifyMember($faculty, $accreditationArea, $assignedBy);
+            });
+        }
 
         return response()->json([
             'success' => true,

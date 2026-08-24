@@ -3,11 +3,10 @@
 namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class FacultyAreaAssignmentNotification extends Notification implements ShouldQueue
+class FacultyAreaAssignmentNotification extends Notification
 {
     use Queueable;
 
@@ -23,16 +22,32 @@ class FacultyAreaAssignmentNotification extends Notification implements ShouldQu
         return ['database', 'mail'];
     }
 
-    public function toDatabase(object $notifiable): array
+    public function toArray(object $notifiable): array
     {
+        $areaName = $this->data['area_name'] ?? 'an accreditation area';
+        $programName = $this->data['program_name'] ?? 'your program';
+        $deadline = $this->data['deadline'] ?? null;
+        $instructions = trim((string) ($this->data['instructions'] ?? ''));
+
+        $message = "You have been assigned to {$areaName} for {$programName}.";
+        if ($deadline) {
+            $message .= " Deadline: {$deadline}.";
+        }
+        if ($instructions !== '') {
+            $message .= " {$instructions}";
+        }
+
         return [
             'type' => 'faculty_area_assignment',
-            'program_chair_name' => $this->data['program_chair_name'],
-            'program_name' => $this->data['program_name'],
-            'area_name' => $this->data['area_name'],
-            'deadline' => $this->data['deadline'],
-            'instructions' => $this->data['instructions'],
-            'action_url' => '/user/dashboard/faculty#submission',
+            'title' => "Assigned to {$areaName}",
+            'message' => $message,
+            'program_chair_name' => $this->data['program_chair_name'] ?? null,
+            'program_name' => $programName,
+            'area_name' => $areaName,
+            'area_id' => $this->data['area_id'] ?? null,
+            'deadline' => $deadline,
+            'instructions' => $instructions,
+            'action_url' => '/user/dashboard/faculty?section=areas',
         ];
     }
 
@@ -45,7 +60,7 @@ class FacultyAreaAssignmentNotification extends Notification implements ShouldQu
             ->line("**Program:** {$this->data['program_name']}")
             ->line("**Area:** {$this->data['area_name']}")
             ->line("**Deadline:** {$this->data['deadline']}")
-            ->when($this->data['instructions'], fn ($mail) => $mail->line("**Instructions:** {$this->data['instructions']}"))
+            ->when($this->data['instructions'] ?? null, fn ($mail) => $mail->line("**Instructions:** {$this->data['instructions']}"))
             ->action('Submit Evidence', url('/user/dashboard/faculty'))
             ->line('Please log in to your ADAMS dashboard to upload required documents and complete this accreditation task.');
     }

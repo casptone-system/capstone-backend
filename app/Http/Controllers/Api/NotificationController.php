@@ -29,12 +29,20 @@ class NotificationController extends Controller
             $query->where('data->type', $request->type);
         }
 
-        $notifications = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 15));
+        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $notifications = $query->orderBy('created_at', 'desc')->paginate($perPage);
 
         return response()->json([
             'success' => true,
             'message' => 'Notifications retrieved successfully.',
-            'data' => NotificationResource::collection($notifications),
+            'data' => NotificationResource::collection($notifications->items())->resolve(),
+            'unreadCount' => $request->user()->unreadNotifications()->count(),
+            'meta' => [
+                'current_page' => $notifications->currentPage(),
+                'last_page' => $notifications->lastPage(),
+                'per_page' => $notifications->perPage(),
+                'total' => $notifications->total(),
+            ],
         ], 200);
     }
 
@@ -155,20 +163,18 @@ class NotificationController extends Controller
      */
     public function destroy(Request $request, string $id)
     {
+        $id = preg_replace('/^(inbox|task):/i', '', trim($id)) ?: $id;
         $notification = $request->user()->notifications()->where('id', $id)->first();
 
-        if (!$notification) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Notification not found.',
-            ], 404);
+        if ($notification) {
+            $notification->delete();
         }
-
-        $notification->delete();
 
         return response()->json([
             'success' => true,
-            'message' => 'Notification deleted successfully.',
+            'message' => $notification
+                ? 'Notification deleted successfully.'
+                : 'Notification already dismissed.',
         ], 200);
     }
 }

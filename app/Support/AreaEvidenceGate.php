@@ -25,8 +25,8 @@ class AreaEvidenceGate
 
     public static function assertCanUpload(?User $user, ?AccreditationArea $area): void
     {
-        if (! $user || ! $area || ! $user->isChairOfArea($area)) {
-            abort(403, 'Only the assigned Area Chair may upload files for this area.');
+        if (! $user || ! $area || ! $user->isAssignedToArea($area)) {
+            abort(403, 'Only the assigned Area Chair or area members may upload files for this area.');
         }
     }
 }

@@ -58,8 +58,8 @@ class UserResource extends JsonResource
             ] : null,
             'teamId' => $this->team_id ?? null,
             'team_id' => $this->team_id ?? null,
-            'programId' => $this->program_id ?? null,
-            'program_id' => $this->program_id ?? null,
+            'programId' => $this->getEffectiveProgramId(),
+            'program_id' => $this->getEffectiveProgramId(),
         ];
     }
 }

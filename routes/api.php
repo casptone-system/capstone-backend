@@ -86,6 +86,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
+    Route::get('program-chair/areas/{accreditationArea}/documents', [AccreditationAreaController::class, 'programChairAreaDocumentFiles']);
     Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
     Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);
     Route::post('accreditation-areas/submit-files', [AccreditationAreaController::class, 'submitFiles']);
@@ -150,6 +151,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('notifications/{id}', [NotificationController::class, 'show']);
     Route::post('notifications/{id}/mark-read', [NotificationController::class, 'markAsRead']);
     Route::get('notifications/{id}/download-instrument', [NotificationController::class, 'downloadInstrumentFile']);
+    Route::post('notifications/{id}/dismiss', [NotificationController::class, 'destroy']);
     Route::delete('notifications/{id}', [NotificationController::class, 'destroy']);
     Route::apiResource('notifications', NotificationController::class)->only(['index']);
 
@@ -178,6 +180,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('accreditation-workspaces/{workspace}/criteria/{requirement}/evidence', [AccreditationWorkspaceController::class, 'uploadEvidence']);
     Route::post('accreditation-workspaces/{workspace}/criteria/{requirement}/done', [AccreditationWorkspaceController::class, 'markDone']);
     Route::get('accreditation-workspaces/{workspace}/evidence/{evidence}/download', [AccreditationWorkspaceController::class, 'downloadEvidence']);
+    Route::get('accreditation-workspaces/{workspace}/evidence/{evidence}/preview', [AccreditationWorkspaceController::class, 'previewEvidence']);
 
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);

@@ -182,10 +182,21 @@ class User extends Authenticatable
     public function getEffectiveProgramId(): ?int
     {
         if ($this->program_id) {
-            return $this->program_id;
+            return (int) $this->program_id;
         }
 
-        return $this->team?->program_id;
+        if ($this->team?->program_id) {
+            return (int) $this->team->program_id;
+        }
+
+        $chairedProgramId = Program::where('chair_id', $this->id)->value('id');
+        if ($chairedProgramId) {
+            return (int) $chairedProgramId;
+        }
+
+        $membershipProgramId = $this->programMemberships()->orderByDesc('id')->value('program_id');
+
+        return $membershipProgramId ? (int) $membershipProgramId : null;
     }
 
     public function assignedProgram(): ?Program

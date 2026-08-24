@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -77,6 +78,34 @@ class Document extends Model
             'current_version' => 'integer',
             'uploaded_by' => 'integer',
         ];
+    }
+
+    /**
+     * Documents attached directly to an area or via a parameter content row.
+     */
+    public function scopeForArea(Builder $query, int $areaId): Builder
+    {
+        return $query->where(function (Builder $inner) use ($areaId) {
+            $inner->where('area_id', $areaId)
+                ->orWhereHas('contentRow.parameter', function (Builder $parameter) use ($areaId) {
+                    $parameter->where('area_id', $areaId);
+                });
+        });
+    }
+
+    /**
+     * Documents that belong to a program even when program_id on the row is missing.
+     */
+    public function scopeForProgram(Builder $query, int $programId): Builder
+    {
+        return $query->where(function (Builder $inner) use ($programId) {
+            $inner->where('program_id', $programId)
+                ->orWhereHas('area.cycle', fn (Builder $cycle) => $cycle->where('program_id', $programId))
+                ->orWhereHas(
+                    'contentRow.parameter.area.cycle',
+                    fn (Builder $cycle) => $cycle->where('program_id', $programId)
+                );
+        });
     }
 
     /**

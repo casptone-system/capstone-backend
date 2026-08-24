@@ -60,6 +60,7 @@ class DeanAssignedNotification extends Notification
             'college_name' => $this->college->name,
             'assigned_by' => $this->assignedBy?->email ?? null,
             'target_user_name' => $targetName,
+            'action_url' => $isAdminView ? '/superadmin/users' : '/user/dashboard/dean?section=notifications',
         ];
     }
 }

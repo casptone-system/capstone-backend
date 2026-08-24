@@ -80,11 +80,11 @@ class Program extends Model
     }
 
     /**
-     * Get the active program membership records.
+     * Get the program membership records.
      */
     public function activeMembers(): HasMany
     {
-        return $this->hasMany(ProgramMember::class)->whereNull('ended_at');
+        return $this->hasMany(ProgramMember::class);
     }
 
     /**

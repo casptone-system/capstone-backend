@@ -4,11 +4,10 @@ namespace App\Notifications;
 
 use App\Models\AccreditationArea;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class AreaInChargeAssignedNotification extends Notification implements ShouldQueue
+class AreaInChargeAssignedNotification extends Notification
 {
     use Queueable;
 
@@ -58,6 +57,7 @@ class AreaInChargeAssignedNotification extends Notification implements ShouldQue
             'program_id' => $cycle?->program_id,
             'program_name' => $cycle?->program?->name,
             'instrument_id' => $this->area->instrument_id,
+            'action_url' => '/user/dashboard/faculty?section=areas',
         ];
     }
 }

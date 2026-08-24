@@ -3,11 +3,10 @@
 namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class FacultySubmissionNotification extends Notification implements ShouldQueue
+class FacultySubmissionNotification extends Notification
 {
     use Queueable;
 
@@ -23,16 +22,23 @@ class FacultySubmissionNotification extends Notification implements ShouldQueue
         return ['database', 'mail'];
     }
 
-    public function toDatabase(object $notifiable): array
+    public function toArray(object $notifiable): array
     {
+        $facultyName = $this->data['faculty_name'] ?? 'A faculty member';
+        $areaName = $this->data['area_name'] ?? 'an accreditation area';
+        $programName = $this->data['program_name'] ?? 'your program';
+        $fileCount = $this->data['file_count'] ?? 0;
+
         return [
             'type' => 'faculty_submission',
-            'faculty_name' => $this->data['faculty_name'],
-            'area_name' => $this->data['area_name'],
-            'program_name' => $this->data['program_name'],
-            'file_count' => $this->data['file_count'],
-            'submitted_at' => $this->data['submitted_at'],
-            'action_url' => '/user/dashboard/program-chair#review',
+            'title' => "New submission for {$areaName}",
+            'message' => "{$facultyName} submitted {$fileCount} file(s) for {$areaName} in {$programName}.",
+            'faculty_name' => $facultyName,
+            'area_name' => $areaName,
+            'program_name' => $programName,
+            'file_count' => $fileCount,
+            'submitted_at' => $this->data['submitted_at'] ?? null,
+            'action_url' => '/user/dashboard/program-chair?section=review',
         ];
     }
 
