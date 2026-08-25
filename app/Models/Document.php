@@ -93,6 +93,16 @@ class Document extends Model
         });
     }
 
+    public function scopePdfOnly(Builder $query): Builder
+    {
+        return $query->whereHas('versions', function (Builder $versions) {
+            $versions->where(function (Builder $inner) {
+                $inner->where('mime_type', 'application/pdf')
+                    ->orWhere('original_name', 'like', '%.pdf');
+            });
+        });
+    }
+
     /**
      * Documents that belong to a program even when program_id on the row is missing.
      */

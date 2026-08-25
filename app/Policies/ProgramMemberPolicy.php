@@ -53,11 +53,11 @@ class ProgramMemberPolicy
         }
 
         if ($user->isDean()) {
-            return $program->college_id === $user->getEffectiveCollegeId();
+            return $program->college_id === $user->college_id;
         }
 
         if ($user->isProgramChair()) {
-            return $program->id === $user->getEffectiveProgramId();
+            return $user->ownsAssignedProgram($program->id);
         }
 
         return false;

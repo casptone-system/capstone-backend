@@ -15,6 +15,11 @@ Schedule::command('notifications:check-deadline-near')
     ->withoutOverlapping()
     ->onOneServer();
 
+Schedule::command('notifications:check-area-deadlines')
+    ->hourly()
+    ->description('Remind Area In-Charge and members about incomplete area deadlines')
+    ->withoutOverlapping();
+
 // Schedule a daily backup of the database as a demonstration of recovery planning.
 Schedule::command('database:backup --compress=gzip')
     ->dailyAt('02:00')

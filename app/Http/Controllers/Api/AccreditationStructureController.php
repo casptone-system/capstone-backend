@@ -130,7 +130,7 @@ class AccreditationStructureController extends Controller
         ]);
         $assignee = User::findOrFail($validated['chair_id']);
 
-        if (! $assignee->isAreaIncharge() || $assignee->getEffectiveProgramId() !== $cycle->program_id) {
+        if (! $assignee->isAreaIncharge() || ! $assignee->belongsToProgram((int) $cycle->program_id)) {
             abort(422, 'The selected user must be an Area In-Charge assigned to this program.');
         }
 
@@ -152,11 +152,22 @@ class AccreditationStructureController extends Controller
             abort(401);
         }
 
-        if ($user->isVPAA() || $user->isDean()) {
+        if ($user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor()) {
             return;
         }
 
-        if ($user->isProgramChair() && (int) $cycle->program?->chair_id === (int) $user->id) {
+        if ($user->isDean()) {
+            $collegeId = $user->college_id;
+            abort_unless(
+                $collegeId && (int) $cycle->program()->value('college_id') === (int) $collegeId,
+                403,
+                'You are not authorized to view this accreditation structure.'
+            );
+
+            return;
+        }
+
+        if ($user->isProgramChair() && (int) $cycle->program()->value('chair_id') === (int) $user->id) {
             return;
         }
 

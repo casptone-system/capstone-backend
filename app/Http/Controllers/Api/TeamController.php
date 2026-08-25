@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Team;
+use App\Support\OrgScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -11,10 +12,15 @@ class TeamController extends Controller
 {
     public function index(Request $request)
     {
+        $user = $request->user('api') ?? $request->user();
+        abort_unless($user, 401);
+
         $query = Team::with(['program', 'creator'])
             ->orderByDesc('created_at');
+        OrgScope::constrainPrograms($query, $user);
 
         if ($request->filled('program_id')) {
+            abort_unless(OrgScope::canSeeProgram($user, (int) $request->program_id), 403, 'You are not allowed to view this program\'s teams.');
             $query->where('program_id', $request->program_id);
         }
 
@@ -58,16 +64,11 @@ class TeamController extends Controller
 
     public function store(Request $request)
     {
-        $user = $request->user('api');
+        $user = $request->user('api') ?? $request->user();
 
-        $isSuperAdmin = $user && (
-            $user->hasRole('Super Administrator') ||
-            $user->hasRole('Super Admin') ||
-            $user->hasRole('super administrator') ||
-            $user->hasRole('superadmin')
-        );
+        $isSuperAdmin = $user && $user->isSuperAdmin();
 
-        if (! $user || (! $user->hasRole('Program Chair') && ! $isSuperAdmin && ! $user->can('manage teams'))) {
+        if (! $user || (! $user->isProgramChair() && ! $isSuperAdmin && ! $user->can('manage teams'))) {
             return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
         }
 
@@ -76,6 +77,12 @@ class TeamController extends Controller
             'program_id' => ['required', 'exists:programs,id'],
             'expires_at' => ['nullable', 'date'],
         ]);
+
+        $programId = (int) $validated['program_id'];
+        abort_unless(OrgScope::canSeeProgram($user, $programId), 403, 'You are not allowed to create a team for this program.');
+        if ($user->isProgramChair() && ! $user->ownsAssignedProgram($programId)) {
+            abort(403, 'You can only create a team for the program you chair.');
+        }
 
         do {
             $code = strtoupper(Str::random(6));
@@ -110,8 +117,11 @@ class TeamController extends Controller
         ], 201);
     }
 
-    public function show(Team $team)
+    public function show(Request $request, Team $team)
     {
+        $user = $request->user('api') ?? $request->user();
+        abort_unless($user && OrgScope::canSeeProgram($user, (int) $team->program_id), 403, 'You are not allowed to view this team.');
+
         return response()->json([
             'success' => true,
             'message' => 'Team retrieved successfully.',

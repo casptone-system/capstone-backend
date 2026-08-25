@@ -53,6 +53,7 @@ class Program extends Model
      */
     protected $appends = [
         'chair_name',
+        'needs_chair_assigned',
     ];
 
     /**
@@ -72,11 +73,20 @@ class Program extends Model
     }
 
     /**
-     * Return the effective chair name from the related user or legacy text field.
+     * Return the chair's real user name. Legacy faker `chair` strings are not displayed.
      */
     public function getChairNameAttribute(): ?string
     {
-        return $this->chairUser?->name ?? $this->attributes['chair'] ?? null;
+        if ($this->chair_id) {
+            return $this->chairUser?->name;
+        }
+
+        return null;
+    }
+
+    public function getNeedsChairAssignedAttribute(): bool
+    {
+        return empty($this->chair_id);
     }
 
     /**

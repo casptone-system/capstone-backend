@@ -13,6 +13,7 @@ use App\Notifications\AreaInChargeAssignedNotification;
 use App\Support\AreaAssignmentNotifier;
 use App\Services\AccreditationWorkspaceService;
 use App\Services\EvidenceStorage;
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -32,7 +33,7 @@ class AccreditationWorkspaceController extends Controller
         if ($user->isProgramChair()) {
             $query->where('program_id', $user->assignedProgramId() ?: 0);
         } elseif ($user->isDean()) {
-            $collegeId = $user->getEffectiveCollegeId();
+            $collegeId = $user->college_id;
             $query->whereHas('program', fn ($program) => $program->where('college_id', $collegeId ?: 0));
         } elseif ($user->isFaculty() || $user->isAreaIncharge()) {
             $query->where('program_id', $user->getEffectiveProgramId() ?: 0);
@@ -107,7 +108,7 @@ class AccreditationWorkspaceController extends Controller
 
         $area->update(['chair_id' => $candidate->id]);
         if (! $candidate->isAreaIncharge()) {
-            $candidate->assignRole('Area In-Charge');
+            $candidate->assignRole(RoleSlug::AREA_IN_CHARGE);
         }
         $candidate->notify(new AreaInChargeAssignedNotification($area->fresh(['cycle.program'])));
 
@@ -304,7 +305,7 @@ class AccreditationWorkspaceController extends Controller
         if ($user->isVPAA() || $user->isQA() || $user->isSuperAdmin()) {
             return;
         }
-        if ($user->isDean() && (int) $workspace->program?->college_id === (int) $user->getEffectiveCollegeId()) {
+        if ($user->isDean() && (int) $workspace->program?->college_id === (int) $user->college_id) {
             return;
         }
         if ($user->isProgramChair() && $user->ownsAssignedProgram((int) $workspace->program_id)) {

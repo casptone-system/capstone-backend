@@ -8,6 +8,8 @@ use App\Models\Program;
 use App\Models\ProgramMember;
 use App\Models\Team;
 use App\Models\User;
+use App\Support\OrgScope;
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -24,6 +26,7 @@ class ProgramController extends Controller
         $this->authorize('viewAny', Program::class);
 
         $query = Program::with(['college', 'chairUser']);
+        OrgScope::constrainPrograms($query, $request->user());
 
         if ($request->filled('college_id')) {
             $query->where('college_id', $request->college_id);
@@ -85,7 +88,7 @@ class ProgramController extends Controller
         }
 
         if ($request->user()?->isDean()) {
-            $collegeId = $request->user()->getEffectiveCollegeId();
+            $collegeId = $request->user()->college_id;
             if (! $collegeId) {
                 return response()->json([
                     'success' => false,
@@ -111,7 +114,11 @@ class ProgramController extends Controller
                 ], 422);
             }
 
-            $chairCollegeId = $chairUser->college_id ?? $chairUser->getEffectiveCollegeId();
+            if ($response = $this->rejectIfChairAlreadyAssigned($chairUser, null)) {
+                return $response;
+            }
+
+            $chairCollegeId = $chairUser->college_id;
             if ($chairCollegeId && $chairCollegeId !== $validated['college_id']) {
                 return response()->json([
                     'success' => false,
@@ -235,33 +242,54 @@ class ProgramController extends Controller
 
     private function userHasProgramChairRole(User $user): bool
     {
-        return $user->hasRole('Program Chair')
-            || $user->hasRole('program-chair')
-            || $user->hasRole('ProgramChair')
-            || $user->hasRole('faculty')
-            || $user->hasCanonicalRole('program-chair')
-            || $user->hasCanonicalRole('faculty')
-            || $user->hasAnyCanonicalRole(['program-chair', 'programchair', 'program chair', 'faculty']);
+        return $user->isProgramChair() || $user->isFaculty();
+    }
+
+    private function rejectIfChairAlreadyAssigned(User $chairUser, ?int $programId): ?\Illuminate\Http\JsonResponse
+    {
+        $existing = Program::where('chair_id', $chairUser->id)
+            ->when($programId, fn ($q) => $q->where('id', '!=', $programId))
+            ->first();
+
+        if ($existing) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This user already chairs a different program.',
+                'errors' => ['chair_id' => ['A Program Chair may only be assigned to one program.']],
+            ], 422);
+        }
+
+        return null;
     }
 
     public function removeMember(Program $program, User $user)
     {
+        $actor = request()->user();
+        abort_unless(
+            $actor && (
+                $actor->isSuperAdmin()
+                || ($actor->isDean() && (int) $program->college_id === (int) $actor->college_id)
+                || ($actor->isProgramChair() && $actor->ownsAssignedProgram($program->id))
+            ),
+            403,
+            'You are not allowed to remove members from this program.'
+        );
+
         $member = ProgramMember::where('program_id', $program->id)
             ->where('user_id', $user->id)
             ->first();
+        $belongs = $user->belongsToProgram($program->id);
 
-        if (! $member) {
+        if (! $member && ! $belongs) {
             return response()->json([
                 'success' => false,
                 'message' => 'This faculty member is not assigned to the program.',
             ], 404);
         }
 
-        $this->authorize('remove', $member);
+        $member?->delete();
 
-        $member->delete();
-
-        if ((int) $user->program_id === (int) $program->id) {
+        if ($belongs) {
             $user->program_id = null;
             $user->save();
         }
@@ -300,6 +328,11 @@ class ProgramController extends Controller
 
         $validated = $request->validate($rules);
 
+        $actor = $request->user();
+        if (! $actor?->isVPAA() && ! $actor?->isSuperAdmin()) {
+            unset($validated['scheduled_visit'], $validated['valid_until']);
+        }
+
         if ($request->user()?->isDean() && $request->has('college_id')) {
             return response()->json([
                 'success' => false,
@@ -320,6 +353,10 @@ class ProgramController extends Controller
                     ], 422);
                 }
 
+                if ($response = $this->rejectIfChairAlreadyAssigned($chairUser, $program->id)) {
+                    return $response;
+                }
+
                 if (empty($validated['chair'])) {
                     $validated['chair'] = $chairUser->name;
                 }
@@ -337,7 +374,7 @@ class ProgramController extends Controller
         if (array_key_exists('chair_id', $validated) && ! empty($validated['chair_id'])) {
             $newChair = User::find($validated['chair_id']);
             if ($newChair) {
-                $chairCollegeId = $newChair->college_id ?? $newChair->getEffectiveCollegeId();
+                $chairCollegeId = $newChair->college_id;
                 if ($chairCollegeId && $chairCollegeId !== $program->college_id) {
                     return response()->json([
                         'success' => false,
@@ -404,7 +441,7 @@ class ProgramController extends Controller
         $firstName = $parts[0] ?? $name;
         $lastName = count($parts) > 1 ? implode(' ', array_slice($parts, 1)) : '';
 
-        $role = Role::firstOrCreate(['name' => 'Program Chair', 'guard_name' => 'web']);
+        $role = Role::firstOrCreate(['name' => RoleSlug::PROGRAM_CHAIR, 'guard_name' => 'web']);
 
         $userData = [
             'name' => $name,
@@ -495,8 +532,8 @@ class ProgramController extends Controller
             $updated = true;
         }
 
-        if (! $chairUser->hasRole('Program Chair')) {
-            $chairUser->assignRole('Program Chair');
+        if (! $chairUser->isProgramChair()) {
+            $chairUser->assignRole(RoleSlug::PROGRAM_CHAIR);
         }
 
         if ($updated) {

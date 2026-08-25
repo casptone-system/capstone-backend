@@ -18,7 +18,7 @@ class ProgramResource extends JsonResource
     public function toArray(Request $request): array
     {
         $facultyUsers = User::where('program_id', $this->id)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Faculty'))
+            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
             ->get();
 
         $faculty = $facultyUsers->map(function (User $user): array {
@@ -50,6 +50,7 @@ class ProgramResource extends JsonResource
             'code' => $this->code,
             'chair' => $this->chair_name,
             'chairId' => $this->chair_id,
+            'needsChairAssigned' => $this->needs_chair_assigned,
             'activeCycleId' => $this->active_cycle_id,
             'activeLevel' => $this->relationLoaded('activeCycle')
                 ? $this->activeCycle?->level

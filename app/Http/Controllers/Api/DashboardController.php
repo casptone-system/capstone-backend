@@ -9,6 +9,7 @@ use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
 use App\Models\Task;
+use App\Support\OrgScope;
 use Illuminate\Http\Request;
 
 class DashboardController extends Controller
@@ -18,39 +19,71 @@ class DashboardController extends Controller
      */
     public function index(Request $request)
     {
-        // Optional filter by program_id
-        $programId = $request->get('program_id');
+        $user = $request->user();
+        $requestedProgramId = $request->filled('program_id') ? (int) $request->get('program_id') : null;
+        $visibleIds = OrgScope::visibleProgramIds($user);
+
+        if ($requestedProgramId) {
+            abort_unless(OrgScope::canSeeProgram($user, $requestedProgramId), 403, 'You are not allowed to view this program.');
+            $programId = $requestedProgramId;
+            $programIds = [$requestedProgramId];
+        } elseif ($visibleIds === null) {
+            $programId = null;
+            $programIds = null;
+        } else {
+            $programId = count($visibleIds) === 1 ? $visibleIds[0] : null;
+            $programIds = $visibleIds;
+        }
+
+        $constrainByPrograms = function ($query, string $column = 'id') use ($programId, $programIds) {
+            if ($programId) {
+                return $query->where($column, $programId);
+            }
+            if ($programIds !== null) {
+                if ($programIds === []) {
+                    return $query->whereRaw('0 = 1');
+                }
+
+                return $query->whereIn($column, $programIds);
+            }
+
+            return $query;
+        };
 
         // --- Total Programs ---
         $totalProgramsQuery = Program::query();
-        if ($programId) {
-            $totalProgramsQuery->where('id', $programId);
-        }
+        $totalProgramsQuery = $constrainByPrograms($totalProgramsQuery, 'id');
         $totalPrograms = $totalProgramsQuery->count();
+
+        $visibleProgramIds = $programId ? [$programId] : $programIds;
+        $limitToPrograms = function ($query, string $column = 'program_id') use ($visibleProgramIds) {
+            if ($visibleProgramIds === null) {
+                return $query;
+            }
+            if ($visibleProgramIds === []) {
+                return $query->whereRaw('0 = 1');
+            }
+
+            return $query->whereIn($column, $visibleProgramIds);
+        };
 
         // --- Total Areas ---
         $totalAreasQuery = AccreditationArea::query();
-        if ($programId) {
-            $totalAreasQuery->whereHas('cycle.program', function ($q) use ($programId) {
-                $q->where('id', $programId);
-            });
+        if ($visibleProgramIds !== null) {
+            $ids = $visibleProgramIds;
+            $totalAreasQuery->whereHas('cycle', fn ($q) => $ids === [] ? $q->whereRaw('0 = 1') : $q->whereIn('program_id', $ids));
         }
         $totalAreas = $totalAreasQuery->count();
 
         // --- Total Evidence (Documents) ---
-        $totalEvidenceQuery = Document::query();
-        if ($programId) {
-            $totalEvidenceQuery->where('program_id', $programId);
-        }
+        $totalEvidenceQuery = $limitToPrograms(Document::query());
         $totalEvidence = $totalEvidenceQuery->count();
 
         // --- Compliance % ---
-        // Areas with at least one document uploaded / total areas
         $areasWithEvidenceQuery = AccreditationArea::whereHas('documents');
-        if ($programId) {
-            $areasWithEvidenceQuery->whereHas('cycle.program', function ($q) use ($programId) {
-                $q->where('id', $programId);
-            });
+        if ($visibleProgramIds !== null) {
+            $ids = $visibleProgramIds;
+            $areasWithEvidenceQuery->whereHas('cycle', fn ($q) => $ids === [] ? $q->whereRaw('0 = 1') : $q->whereIn('program_id', $ids));
         }
         $areasWithEvidence = $areasWithEvidenceQuery->count();
         $compliancePercent = $totalAreas > 0
@@ -58,94 +91,74 @@ class DashboardController extends Controller
             : 0;
 
         // --- Readiness % ---
-        // Cycles with 'Ready' or 'Completed' status / total cycles
-        $totalCyclesQuery = AccreditationCycle::query();
-        if ($programId) {
-            $totalCyclesQuery->where('program_id', $programId);
-        }
+        $totalCyclesQuery = $limitToPrograms(AccreditationCycle::query());
         $totalCycles = $totalCyclesQuery->count();
 
-        $readyCyclesQuery = AccreditationCycle::whereIn('status', ['Ready', 'Completed']);
-        if ($programId) {
-            $readyCyclesQuery->where('program_id', $programId);
-        }
+        $readyCyclesQuery = $limitToPrograms(AccreditationCycle::whereIn('status', ['Ready', 'Completed']));
         $readyCycles = $readyCyclesQuery->count();
         $readinessPercent = $totalCycles > 0
             ? round(($readyCycles / $totalCycles) * 100, 1)
             : 0;
 
         // --- Pending Reviews ---
-        // Reviews in non-terminal states (not Ready, not Rejected)
         $pendingReviewsQuery = Review::whereNotIn('current_status', ['Ready', 'Rejected']);
-        if ($programId) {
-            $pendingReviewsQuery->whereHas('cycle', function ($q) use ($programId) {
-                $q->where('program_id', $programId);
-            });
+        if ($visibleProgramIds !== null) {
+            $ids = $visibleProgramIds;
+            $pendingReviewsQuery->whereHas('cycle', fn ($q) => $ids === [] ? $q->whereRaw('0 = 1') : $q->whereIn('program_id', $ids));
         }
         $pendingReviews = $pendingReviewsQuery->count();
 
         // --- Overdue Tasks ---
-        // Tasks past due date that are not 'Completed'
-        $overdueTasksQuery = Task::where('due_date', '<', now())
-            ->where('status', '!=', 'Completed');
-        if ($programId) {
-            $overdueTasksQuery->whereHas('area.cycle.program', function ($q) use ($programId) {
-                $q->where('id', $programId);
-            });
+        $overdueTasksQuery = Task::where('due_date', '<', now())->where('status', '!=', 'Completed');
+        if ($visibleProgramIds !== null) {
+            $ids = $visibleProgramIds;
+            $overdueTasksQuery->whereHas('area.cycle', fn ($q) => $ids === [] ? $q->whereRaw('0 = 1') : $q->whereIn('program_id', $ids));
         }
         $overdueTasks = $overdueTasksQuery->count();
 
+        $scopeHas = function ($builder, string $relation, string $column = 'program_id') use ($visibleProgramIds) {
+            if ($visibleProgramIds === null) {
+                return $builder;
+            }
+            $ids = $visibleProgramIds;
+
+            return $builder->whereHas($relation, fn ($q) => $ids === [] ? $q->whereRaw('0 = 1') : $q->whereIn($column, $ids));
+        };
+
         // --- Area Status Breakdown ---
-        $areaStatuses = AccreditationArea::selectRaw('status, count(*) as count')
-            ->when($programId, function ($q) use ($programId) {
-                $q->whereHas('cycle.program', function ($q) use ($programId) {
-                    $q->where('id', $programId);
-                });
-            })
+        $areaStatuses = $scopeHas(AccreditationArea::selectRaw('status, count(*) as count'), 'cycle')
             ->groupBy('status')
             ->pluck('count', 'status')
             ->toArray();
 
         // --- Cycle Status Breakdown ---
-        $cycleStatuses = AccreditationCycle::selectRaw('status, count(*) as count')
-            ->when($programId, function ($q) use ($programId) {
-                $q->where('program_id', $programId);
-            })
+        $cycleStatuses = $limitToPrograms(AccreditationCycle::selectRaw('status, count(*) as count'))
             ->groupBy('status')
             ->pluck('count', 'status')
             ->toArray();
 
         // --- Task Status Breakdown ---
-        $taskStatuses = Task::selectRaw('status, count(*) as count')
-            ->when($programId, function ($q) use ($programId) {
-                $q->whereHas('area.cycle.program', function ($q) use ($programId) {
-                    $q->where('id', $programId);
-                });
-            })
+        $taskStatuses = $scopeHas(Task::selectRaw('status, count(*) as count'), 'area.cycle')
             ->groupBy('status')
             ->pluck('count', 'status')
             ->toArray();
 
         // --- Review Status Breakdown ---
-        $reviewStatuses = Review::selectRaw('current_status as status, count(*) as count')
-            ->when($programId, function ($q) use ($programId) {
-                $q->whereHas('cycle', function ($q) use ($programId) {
-                    $q->where('program_id', $programId);
-                });
-            })
+        $reviewStatuses = $scopeHas(Review::selectRaw('current_status as status, count(*) as count'), 'cycle')
             ->groupBy('current_status')
             ->pluck('count', 'status')
             ->toArray();
 
-        // --- Per-Program Breakdown (only when no program filter) ---
+        // --- Per-Program Breakdown (only when no single-program filter) ---
         $programBreakdown = null;
-        if (!$programId) {
-            $programs = Program::withCount([
+        if (! $programId) {
+            $programsQuery = Program::withCount([
                 'accreditationCycles as cycles_count',
                 'accreditationCycles as ready_cycles_count' => function ($q) {
                     $q->whereIn('status', ['Ready', 'Completed']);
                 },
-            ])->get();
+            ]);
+            $programs = $limitToPrograms($programsQuery, 'id')->get();
 
             $programBreakdown = $programs->map(function ($program) {
                 $programAreas = AccreditationArea::whereHas('cycle', function ($q) use ($program) {

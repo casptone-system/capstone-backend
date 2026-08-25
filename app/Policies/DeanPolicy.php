@@ -13,7 +13,7 @@ class DeanPolicy
             return false;
         }
 
-        return (bool) $user->getEffectiveCollegeId();
+        return (bool) $user->college_id;
     }
 
     public function monitorCollege(User $user, ?College $college = null): bool
@@ -22,7 +22,7 @@ class DeanPolicy
             return false;
         }
 
-        $effectiveCollegeId = $user->getEffectiveCollegeId();
+        $effectiveCollegeId = $user->college_id;
 
         if (! $effectiveCollegeId) {
             return false;

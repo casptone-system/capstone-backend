@@ -31,7 +31,7 @@ class FacultyTaskController extends Controller
         $cycle = $area->cycle;
 
         // Verify Program Chair owns this program
-        if ((int) $cycle->program_id !== (int) $user->getEffectiveProgramId()) {
+        if ((int) $cycle->program_id !== (int) $user->assignedProgramId() && ! $user->ownsAssignedProgram((int) $cycle->program_id)) {
             abort(403, 'You are not the Program Chair for this program.');
         }
 
@@ -48,7 +48,7 @@ class FacultyTaskController extends Controller
             abort(422, 'The selected user must have the Faculty role.');
         }
 
-        if (! $cycle->program->members()->where('user_id', $faculty->id)->exists()) {
+        if ((int) $faculty->program_id !== (int) $cycle->program_id) {
             abort(422, 'The selected faculty member does not belong to this program.');
         }
 
@@ -249,7 +249,7 @@ class FacultyTaskController extends Controller
             abort(403, 'Only Program Chair can view pending reviews.');
         }
 
-        $programId = $user->getEffectiveProgramId();
+        $programId = $user->assignedProgramId();
 
         if (! $programId) {
             abort(403, 'You are not assigned to any program.');
@@ -293,7 +293,7 @@ class FacultyTaskController extends Controller
         }
 
         // Verify task belongs to this program
-        if ((int) $task->program_id !== (int) $user->getEffectiveProgramId()) {
+        if ((int) $task->program_id !== (int) $user->assignedProgramId() && ! $user->ownsAssignedProgram((int) $task->program_id)) {
             abort(403, 'You are not authorized to review this task.');
         }
 
@@ -346,7 +346,7 @@ class FacultyTaskController extends Controller
         }
 
         // Verify task belongs to this program
-        if ((int) $task->program_id !== (int) $user->getEffectiveProgramId()) {
+        if ((int) $task->program_id !== (int) $user->assignedProgramId() && ! $user->ownsAssignedProgram((int) $task->program_id)) {
             abort(403, 'You are not authorized to review this task.');
         }
 

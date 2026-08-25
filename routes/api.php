@@ -63,6 +63,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('accreditation-cycles/{accreditationCycle}/forward-to-chair', [AccreditationCycleController::class, 'forwardToChair']);
     Route::post('accreditation-cycles/{accreditationCycle}/set-requirements', [AccreditationCycleController::class, 'setRequirements']);
     Route::post('accreditation-cycles/{accreditationCycle}/program-chair-setup', [AccreditationCycleController::class, 'programChairSetupInfo']);
+    Route::post('accreditation-cycles/{accreditationCycle}/set-schedule', [AccreditationCycleController::class, 'setSchedule']);
     Route::get('accreditation-cycles/{accreditationCycle}/structure', [AccreditationStructureController::class, 'show']);
     Route::post('accreditation-cycles/{accreditationCycle}/structure', [AccreditationStructureController::class, 'store']);
     Route::post('accreditation-cycles/{accreditationCycle}/dean-validate', [AccreditationCycleController::class, 'deanValidate']);
@@ -83,12 +84,14 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'storeRow']);
     Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
     Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
+    Route::delete('parameter-rows/{parameterContentRow}/documents', [FacultyAreaContentController::class, 'destroyRowDocuments']);
     Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
     Route::get('program-chair/areas/{accreditationArea}/documents', [AccreditationAreaController::class, 'programChairAreaDocumentFiles']);
     Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
     Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);
+    Route::post('accreditation-areas/{accreditationArea}/submit-review', [AccreditationAreaController::class, 'submitReview']);
     Route::post('accreditation-areas/submit-files', [AccreditationAreaController::class, 'submitFiles']);
     Route::apiResource('accreditation-areas', AccreditationAreaController::class);
 
@@ -249,18 +252,10 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
         'sessions'
     ]);
 
-    // Join team using invitation coade
+    // Join team using the 6-character team code
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
     // Teams management (Program Chairs / Admins can create teams and codes)
     Route::apiResource('teams', \App\Http\Controllers\Api\TeamController::class)->only(['index', 'store', 'show']);
-
-    // Program invitations
-    Route::get('programs/{program}/invitations', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'index']);
-    Route::post('programs/{program}/invitations', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'store']);
-    Route::post('invitations/{token}/resend', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'resend']);
-    Route::post('invitations/{token}/revoke', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'revoke']);
-    Route::post('invitations/{token}/accept', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'accept']);
-    Route::post('invitations/{token}/approve', [\App\Http\Controllers\Api\ProgramInvitationController::class, 'approve']);
 
     // Reports (compliance, program, college, area, accreditation + PDF/Excel exports)
     Route::get('reports', [ReportController::class, 'index']);

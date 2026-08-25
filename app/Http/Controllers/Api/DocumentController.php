@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Notifications\DocumentUploadedNotification;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
+use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
 use Illuminate\Http\Request;
 
@@ -38,7 +39,7 @@ class DocumentController extends Controller
                     $query->whereRaw('1 = 0');
                 }
             } elseif ($user->isDean()) {
-                $collegeId = $user->getEffectiveCollegeId();
+                $collegeId = $user->college_id;
                 if ($collegeId) {
                     $query->whereHas('program', fn ($q) => $q->where('college_id', $collegeId));
                 } else {
@@ -128,6 +129,11 @@ class DocumentController extends Controller
             'file' => ['required', 'file', 'max:'.$this->evidenceStorage->documentUploadMaxKilobytes()],
         ]);
 
+        $file = $request->file('file');
+        $mimeType = $file->getMimeType();
+        $originalName = $file->getClientOriginalName();
+        $fileSize = $file->getSize();
+
         $area = AreaEvidenceGate::resolveArea(
             isset($validated['area_id']) ? (int) $validated['area_id'] : null,
             isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
@@ -135,6 +141,10 @@ class DocumentController extends Controller
 
         if ($area) {
             AreaEvidenceGate::assertCanUpload($request->user(), $area);
+            AreaDocumentRules::assertPdfUpload($file);
+            AreaDocumentRules::assertRowHasCapacity(
+                isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
+            );
             $validated['area_id'] = $area->id;
             $cycleProgramId = $area->cycle()->value('program_id');
             if ($cycleProgramId && (int) $cycleProgramId !== (int) $validated['program_id']) {
@@ -144,11 +154,6 @@ class DocumentController extends Controller
                 ], 422);
             }
         }
-
-        $file = $request->file('file');
-        $mimeType = $file->getMimeType();
-        $originalName = $file->getClientOriginalName();
-        $fileSize = $file->getSize();
 
         // Prepare document data (do not store the uploaded file path on the documents table)
         $documentData = collect($validated)->except(['file'])->toArray();
@@ -267,6 +272,9 @@ class DocumentController extends Controller
         ]);
 
         $file = $request->file('file');
+        if ($document->area_id || $document->content_row_id) {
+            AreaDocumentRules::assertPdfUpload($file);
+        }
         $mimeType = $file->getMimeType();
         $originalName = $file->getClientOriginalName();
         $fileSize = $file->getSize();

@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -9,28 +10,21 @@ class UserResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $roles = collect($this->getRoleNames());
+        $roles = collect($this->getRoleNames())
+            ->map(fn (string $name) => RoleSlug::canonicalize($name) ?? $name)
+            ->filter()
+            ->unique()
+            ->values();
         $primaryRole = $roles->first() ?: null;
-
-        $roleSlug = null;
-        if ($primaryRole) {
-            $roleSlug = strtolower(str_replace([' ', '_'], '-', $primaryRole));
-            $roleSlug = preg_replace('/[^a-z0-9\-]/', '', $roleSlug);
-        }
 
         $college = $this->college;
         $program = $this->program;
         $team = $this->team;
 
-        // Compute department from available data
-        $department = null;
-        if ($college) {
-            $department = $college->name;
-        } elseif ($program) {
-            $department = $program->name;
-        } elseif ($team) {
-            $department = $team->name;
-        }
+        // `department` is a UI label only (there is no Department entity).
+        // It is the college name when college_id is set, otherwise the program name.
+        // It is no longer inferred from team/program_members fallbacks.
+        $department = $college?->name ?? $program?->name;
 
         return [
             'id' => $this->id,
@@ -44,9 +38,9 @@ class UserResource extends JsonResource
             'birthdate' => $this->birth_date,
             'profilePhoto' => $this->profile_photo ? $this->profile_photo_url : null,
             'profilePhotoPath' => $this->profile_photo,
-            'role' => $primaryRole ?: null,
-            'role_slug' => $roleSlug,
-            'roles' => $roles->values(),
+            'role' => $primaryRole,
+            'role_slug' => $primaryRole,
+            'roles' => $roles,
             'permissions' => $this->getPermissionNames(),
             'department' => $department,
             'college_id' => $this->college_id ?? null,
@@ -58,8 +52,14 @@ class UserResource extends JsonResource
             ] : null,
             'teamId' => $this->team_id ?? null,
             'team_id' => $this->team_id ?? null,
-            'programId' => $this->getEffectiveProgramId(),
-            'program_id' => $this->getEffectiveProgramId(),
+            'programId' => $this->program_id,
+            'program_id' => $this->program_id,
+            'chaired_program_id' => $this->chairedProgramId(),
+            'program' => $program ? [
+                'id' => $program->id,
+                'name' => $program->name,
+                'code' => $program->code,
+            ] : null,
         ];
     }
 }

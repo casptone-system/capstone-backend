@@ -7,9 +7,9 @@ use App\Http\Resources\UserResource;
 use App\Models\AuditLog;
 use App\Models\College;
 use App\Models\Program;
-use App\Models\ProgramMember;
 use App\Models\Team;
 use App\Models\User;
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
@@ -22,12 +22,7 @@ class UserController extends Controller
     {
         $user = $request->user('api') ?? $request->user();
 
-        if (! $user || ! (
-            $user->hasRole('Super Administrator') ||
-            $user->hasRole('Super Admin') ||
-            $user->hasRole('super administrator') ||
-            $user->hasRole('superadmin')
-        )) {
+        if (! $user || ! $user->isSuperAdmin()) {
             return null;
         }
 
@@ -51,41 +46,68 @@ class UserController extends Controller
         return null;
     }
 
+    private function canonicalRoleFromValidated(array $validated): ?string
+    {
+        return RoleSlug::canonicalize($validated['role'] ?? null);
+    }
+
     private function ensureDeanHasValidCollege(array $validated): ?\Illuminate\Http\JsonResponse
     {
-        if (strtolower((string) ($validated['role'] ?? '')) !== 'dean') {
+        if ($this->canonicalRoleFromValidated($validated) !== RoleSlug::DEAN) {
             return null;
         }
 
-        $collegeId = $this->resolveCollegeIdFromValidatedUserData($validated);
+        $collegeId = $validated['college_id'] ?? null;
         if (! $collegeId) {
             return response()->json([
                 'success' => false,
-                'message' => 'A dean must belong to a college via a college, program, or team association.',
+                'message' => 'A dean must be assigned to a college.',
                 'errors' => ['college_id' => ['A dean must belong to a college.']],
             ], 422);
         }
 
-        if (! empty($validated['college_id']) && ! empty($validated['program_id'])) {
-            $programCollegeId = Program::find($validated['program_id'])?->college_id;
-            if ($programCollegeId && $programCollegeId !== $validated['college_id']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'The selected program belongs to a different college than the dean.',
-                    'errors' => ['program_id' => ['The selected program belongs to a different college.']],
-                ], 422);
-            }
+        return null;
+    }
+
+    private function ensureProgramChairHasProgram(array $validated): ?\Illuminate\Http\JsonResponse
+    {
+        if ($this->canonicalRoleFromValidated($validated) !== RoleSlug::PROGRAM_CHAIR) {
+            return null;
         }
 
-        if (! empty($validated['college_id']) && ! empty($validated['team_id'])) {
-            $teamCollegeId = Team::find($validated['team_id'])?->program?->college_id;
-            if ($teamCollegeId && $teamCollegeId !== $validated['college_id']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'The selected team belongs to a different college than the dean.',
-                    'errors' => ['team_id' => ['The selected team belongs to a different college.']],
-                ], 422);
-            }
+        if (empty($validated['program_id'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A program must be selected when creating a Program Chair.',
+                'errors' => ['program_id' => ['A program is required for the Program Chair role.']],
+            ], 422);
+        }
+
+        $program = Program::find($validated['program_id']);
+        if ($program?->chair_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This program already has a Program Chair.',
+                'errors' => ['program_id' => ['This program already has a Program Chair.']],
+            ], 422);
+        }
+
+        return null;
+    }
+
+    private function ensureChairIsNotAlreadyAssigned(?int $programId, ?User $user = null): ?\Illuminate\Http\JsonResponse
+    {
+        if (! $user || ! $programId) {
+            return null;
+        }
+
+        $existing = Program::where('chair_id', $user->id)->where('id', '!=', $programId)->first();
+        if ($existing) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This user already chairs a different program.',
+                'errors' => ['program_id' => ['A Program Chair may only be assigned to one program.']],
+            ], 422);
         }
 
         return null;
@@ -97,9 +119,9 @@ class UserController extends Controller
             return null;
         }
 
-        $query = User::whereNotNull('college_id')
+        $query = User::query()
             ->where('college_id', $collegeId)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Dean'));
+            ->whereHas('roles', fn ($roleQuery) => $roleQuery->where('name', RoleSlug::DEAN));
 
         if ($user) {
             $query->whereKeyNot($user->id);
@@ -114,6 +136,23 @@ class UserController extends Controller
         }
 
         return null;
+    }
+
+    private function applyRoleOrgConstraints(User $user, string $slug, array $validated): void
+    {
+        if (RoleSlug::isInstitutionWide($slug)) {
+            $user->college_id = null;
+            $user->program_id = null;
+            $user->team_id = null;
+
+            return;
+        }
+
+        if ($slug === RoleSlug::DEAN) {
+            $user->college_id = $validated['college_id'] ?? $user->college_id;
+            $user->program_id = null;
+            $user->team_id = null;
+        }
     }
 
     private function createWelcomeTaskForUser(User $user, User $admin): void
@@ -323,35 +362,30 @@ class UserController extends Controller
         $actor = $this->ensureSuperAdmin($request);
         $user = $request->user();
 
-        if (! $actor && (! $user || (! $user->hasRole('Dean') && ! $user->isProgramChair()))) {
+        if (! $actor && (! $user || (! $user->isDean() && ! $user->isProgramChair()))) {
             return response()->json(['success' => false, 'message' => 'You do not have permission to view users.'], 403);
         }
 
         $query = User::query()->with(['program', 'team']);
 
-        if ($user && $user->hasRole('Dean')) {
-            $collegeId = $user->college_id ?? $user->getEffectiveCollegeId();
+        if ($user && $user->isDean()) {
+            $collegeId = $user->college_id;
             if ($collegeId) {
                 $query->where(function ($q) use ($collegeId) {
                     $q->where('college_id', $collegeId)
                         ->orWhereIn('program_id', Program::where('college_id', $collegeId)->pluck('id'));
                 });
+            } else {
+                $query->whereRaw('0 = 1');
             }
         }
 
         if ($user && $user->isProgramChair()) {
-            $programId = $user->getEffectiveProgramId();
+            $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
             if (! $programId) {
                 $query->whereRaw('0 = 1');
             } else {
-                $query->where(function ($q) use ($programId) {
-                    $q->where('program_id', $programId)
-                        ->orWhereExists(function ($sub) use ($programId) {
-                            $sub->from('program_members')
-                                ->whereColumn('program_members.user_id', 'users.id')
-                                ->where('program_members.program_id', $programId);
-                        });
-                });
+                $query->where('program_id', $programId);
             }
         }
 
@@ -398,13 +432,34 @@ class UserController extends Controller
             'additional_tasks.*.type' => ['in:document_upload,review,approval,assignment,other,onboarding'],
         ]);
 
+        $slug = RoleSlug::canonicalize($validated['role'] ?? null);
+        if (! $slug) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The selected role is invalid.',
+                'errors' => ['role' => ['Use a canonical role slug.']],
+            ], 422);
+        }
+        $validated['role'] = $slug;
+
         if ($response = $this->ensureDeanHasValidCollege($validated)) {
             return $response;
         }
 
-        $collegeId = $this->resolveCollegeIdFromValidatedUserData($validated);
-        if ($response = $this->ensureNoDuplicateDeanForCollege($collegeId)) {
+        if ($response = $this->ensureProgramChairHasProgram($validated)) {
             return $response;
+        }
+
+        $collegeId = $slug === RoleSlug::DEAN ? ($validated['college_id'] ?? null) : null;
+        if ($slug === RoleSlug::DEAN && ($response = $this->ensureNoDuplicateDeanForCollege($collegeId))) {
+            return $response;
+        }
+
+        if ($slug === RoleSlug::PROGRAM_CHAIR) {
+            $chairCandidate = null;
+            if ($response = $this->ensureChairIsNotAlreadyAssigned((int) $validated['program_id'], $chairCandidate)) {
+                return $response;
+            }
         }
 
         $user = null;
@@ -424,14 +479,28 @@ class UserController extends Controller
                 'team_id' => $validated['team_id'] ?? null,
             ]);
 
-            $roleName = str_replace('_', ' ', $validated['role']);
-            $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-            $user->assignRole($role);
-            
-            // Assign default permissions to the role if newly created
-            $this->ensureRoleHasPermissions($role, strtolower($roleName));
+            $slug = RoleSlug::canonicalize($validated['role']) ?? RoleSlug::FACULTY;
+            $this->applyRoleOrgConstraints($user, $slug, $validated);
+            $user->save();
 
-            if (strtolower($validated['role']) === 'dean') {
+            $role = Role::firstOrCreate(['name' => $slug, 'guard_name' => 'web']);
+            $user->assignRole($role);
+            $this->ensureRoleHasPermissions($role, $slug);
+
+            if ($slug === RoleSlug::PROGRAM_CHAIR && ! empty($validated['program_id'])) {
+                $program = Program::find($validated['program_id']);
+                if ($program && ! $program->chair_id) {
+                    $program->update([
+                        'chair_id' => $user->id,
+                        'chair' => $user->name,
+                    ]);
+                    $user->program_id = $program->id;
+                    $user->college_id = $program->college_id;
+                    $user->save();
+                }
+            }
+
+            if ($slug === RoleSlug::DEAN) {
                 $college = $user->college;
                 if ($college) {
                     $user->notify(new \App\Notifications\DeanAssignedNotification($college, $actor, $user));
@@ -506,7 +575,7 @@ class UserController extends Controller
             return response()->json(['success' => false, 'message' => 'You do not have permission to view program chairs.'], 403);
         }
 
-        $chairs = User::role('Program Chair')
+        $chairs = User::role(RoleSlug::PROGRAM_CHAIR)
             ->orderBy('last_name')
             ->orderBy('first_name')
             ->get(['id', 'first_name', 'middle_name', 'last_name', 'email', 'program_id'])
@@ -527,8 +596,8 @@ class UserController extends Controller
             return response()->json(['success' => false, 'message' => 'Only a Program Chair can view Area In-Charges.'], 403);
         }
 
-        $programId = $user->getEffectiveProgramId();
-        $members = User::role('Area In-Charge')
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
+        $members = User::role(RoleSlug::AREA_IN_CHARGE)
             ->where('program_id', $programId)
             ->orderBy('last_name')
             ->orderBy('first_name')
@@ -550,37 +619,15 @@ class UserController extends Controller
             abort(403, 'Only a Program Chair can view program faculty.');
         }
 
-        $programId = $user->getEffectiveProgramId();
-        if (! $programId) {
-            $programId = ProgramMember::where('user_id', $user->id)
-                ->orderByDesc('joined_at')
-                ->value('program_id');
-        }
-
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
         if (! $programId) {
             return response()->json(['success' => true, 'data' => []]);
         }
 
         $faculty = User::query()
-            ->where(function ($q) use ($programId) {
-                $q->where('users.program_id', $programId)
-                    ->orWhereExists(function ($sub) use ($programId) {
-                        $sub->from('program_members')
-                            ->whereColumn('program_members.user_id', 'users.id')
-                            ->where('program_members.program_id', $programId);
-                    });
-            })
-            ->where(function ($q) {
-                $q->whereHas('roles', function ($roleQuery) {
-                    $roleQuery->where(function ($nameQuery) {
-                        $nameQuery->whereRaw('LOWER(name) = ?', ['faculty'])
-                            ->orWhereRaw('LOWER(name) = ?', ['area in-charge']);
-                    });
-                })->orWhereExists(function ($sub) {
-                    $sub->from('program_members as pm')
-                        ->whereColumn('pm.user_id', 'users.id')
-                        ->whereRaw('LOWER(COALESCE(pm.role, "")) in (?, ?)', ['faculty', 'area in-charge']);
-                });
+            ->where('users.program_id', $programId)
+            ->whereHas('roles', function ($roleQuery) {
+                $roleQuery->whereIn('name', [RoleSlug::FACULTY, RoleSlug::AREA_IN_CHARGE]);
             })
             ->with('roles')
             ->orderBy('name')
@@ -626,6 +673,23 @@ class UserController extends Controller
         $q = trim((string) $request->input('q', ''));
         $query = User::with('roles')->whereNull('users.deleted_at');
 
+        if ($user->isProgramChair()) {
+            $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
+            if (! $programId) {
+                return response()->json(['success' => true, 'data' => []]);
+            }
+            $query->where('users.program_id', $programId);
+        } elseif ($user->isDean()) {
+            $collegeId = $user->college_id;
+            if (! $collegeId) {
+                return response()->json(['success' => true, 'data' => []]);
+            }
+            $query->where(function ($scoped) use ($collegeId) {
+                $scoped->where('users.college_id', $collegeId)
+                    ->orWhereIn('users.program_id', Program::where('college_id', $collegeId)->pluck('id'));
+            });
+        }
+
         if ($q !== '') {
             $query->where(function ($where) use ($q) {
                 $where->where('users.name', 'like', "%{$q}%")
@@ -649,7 +713,7 @@ class UserController extends Controller
                 'email' => $person->email,
                 'photo' => $person->profile_photo_url,
                 'profilePhoto' => $person->profile_photo_url,
-                'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
+                'role' => $person->roles->pluck('name')->first() ?: RoleSlug::FACULTY,
             ])->values(),
         ]);
     }
@@ -691,18 +755,47 @@ class UserController extends Controller
         $wasDean = $user->isDean();
         $newRoleName = null;
         if (isset($validated['role'])) {
-            $roleName = str_replace('_', ' ', $validated['role']);
-            $role = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-            $targetRole = strtolower($role->name);
+            $slug = RoleSlug::canonicalize($validated['role']);
+            if (! $slug) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The selected role is invalid.',
+                    'errors' => ['role' => ['Use a canonical role slug.']],
+                ], 422);
+            }
 
-            if ($targetRole === 'dean') {
-                $collegeId = $requestedCollegeId ?? $user->college_id ?? $user->getEffectiveCollegeId();
+            $role = Role::firstOrCreate(['name' => $slug, 'guard_name' => 'web']);
+
+            if ($slug === RoleSlug::DEAN) {
+                $collegeId = $requestedCollegeId ?? $user->college_id;
+                if (! $collegeId) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'A dean must be assigned to a college.',
+                        'errors' => ['college_id' => ['A dean must belong to a college.']],
+                    ], 422);
+                }
                 if ($response = $this->ensureNoDuplicateDeanForCollege($collegeId, $user)) {
                     return $response;
                 }
             }
 
+            if ($slug === RoleSlug::PROGRAM_CHAIR) {
+                $programId = $validated['program_id'] ?? $user->program_id;
+                if (! $programId) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'A program must be selected for a Program Chair.',
+                        'errors' => ['program_id' => ['A program is required for the Program Chair role.']],
+                    ], 422);
+                }
+                if ($response = $this->ensureChairIsNotAlreadyAssigned((int) $programId, $user)) {
+                    return $response;
+                }
+            }
+
             $user->syncRoles([$role->name]);
+            $this->applyRoleOrgConstraints($user, $slug, $validated);
             $newRoleName = $role->name;
         }
         $user->save();

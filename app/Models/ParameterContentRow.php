@@ -44,6 +44,21 @@ class ParameterContentRow extends Model
         return $this->hasOne(Document::class, 'content_row_id')->latestOfMany();
     }
 
+    public function isSectionHeading(): bool
+    {
+        $text = strtoupper(trim((string) $this->content));
+        $text = str_replace(['–', '—', '−'], '-', $text);
+        $text = (string) preg_replace('/\s+/', ' ', $text);
+        $text = (string) preg_replace('/\s*-\s*/', '-', $text);
+
+        return in_array($text, [
+            'IMPLEMENTATION',
+            'OUTCOME/S',
+            'OUTCOMES',
+            'SYSTEM-INPUTS AND PROCESSES',
+        ], true);
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

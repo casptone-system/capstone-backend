@@ -148,8 +148,35 @@ class AccreditationCycle extends Model
         };
     }
 
+    public function isValidityExpired(): bool
+    {
+        if (! $this->valid_until) {
+            return false;
+        }
+
+        return $this->valid_until->lt(now()->startOfDay());
+    }
+
+    public function getValidityStatusAttribute(): string
+    {
+        if (! $this->valid_until) {
+            return 'Not set';
+        }
+
+        return $this->isValidityExpired() ? 'Expired' : 'Valid';
+    }
+
+    public function getPreparationStatusAttribute(): string
+    {
+        return $this->readiness;
+    }
+
     public function getDisplayStatusAttribute(): string
     {
+        if ($this->isValidityExpired()) {
+            return 'Expired';
+        }
+
         return self::mapDisplayStatus($this->status);
     }
 

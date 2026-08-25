@@ -31,7 +31,7 @@ class DocumentPolicy
         }
 
         if ($user->isDean()) {
-            return $document->program?->college_id === $user->getEffectiveCollegeId();
+            return $document->program?->college_id === $user->college_id;
         }
 
         if ($document->area && ($user->isFaculty() || $user->isAreaIncharge()) && $user->isAssignedToArea($document->area)) {
@@ -67,7 +67,7 @@ class DocumentPolicy
         if ($document->area_id || $document->content_row_id) {
             $area = $document->area ?: $document->contentRow?->parameter?->area;
 
-            return $user->isAssignedToArea($area);
+            return $user->isChairOfArea($area);
         }
 
         if ($user->isFaculty()) {
@@ -79,11 +79,11 @@ class DocumentPolicy
         }
 
         if ($user->isProgramChair()) {
-            return $document->program_id === $user->getEffectiveProgramId();
+            return $document->program_id === $user->assignedProgramId();
         }
 
         if ($user->isDean()) {
-            return $document->program?->college_id === $user->getEffectiveCollegeId();
+            return $document->program?->college_id === $user->college_id;
         }
 
         return false;

@@ -15,6 +15,14 @@ class MyAreaResource extends JsonResource
             ? $this->members->contains(fn ($member) => (int) $member->user_id === (int) $user->id)
             : (bool) $user?->isAssignedToArea($this->resource);
         $assignmentRole = $isChair ? 'chair' : ($isMember ? 'member' : null);
+        $review = $this->relationLoaded('reviews')
+            ? $this->reviews->sortByDesc('id')->first()
+            : $this->reviews()->latest('id')->first();
+        $reviewStatus = $review?->current_status;
+        $canSubmit = $isChair && (
+            $reviewStatus === null
+            || in_array($reviewStatus, ['Draft', 'Revision Requested'], true)
+        );
 
         return [
             'id' => $this->id,
@@ -26,7 +34,9 @@ class MyAreaResource extends JsonResource
             'status' => $this->status,
             'deadline' => $this->deadline?->toDateTimeString(),
             'assignmentRole' => $assignmentRole,
-            'canUpload' => true,
+            'canUpload' => $isChair,
+            'canSubmit' => $canSubmit,
+            'reviewStatus' => $reviewStatus,
             'progressPercent' => (int) ($this->progress_percent ?? 0),
             'chair' => $this->whenLoaded('chair', fn () => $this->chair ? new UserResource($this->chair) : null),
             'cycle' => $this->whenLoaded('cycle', fn () => new AccreditationCycleResource($this->cycle)),

@@ -2,14 +2,14 @@
 
 namespace Database\Seeders;
 
-use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
+use App\Services\AaccupStructureService;
 use Illuminate\Database\Seeder;
 
 class AccreditationAreaSeeder extends Seeder
 {
     /**
-     * The default accreditation areas.
+     * @deprecated Use AccreditationArea::AACCUP_AREAS. Kept for older callers.
      */
     public const DEFAULT_AREAS = [
         'Area I: Vision, Mission, Goals',
@@ -24,31 +24,8 @@ class AccreditationAreaSeeder extends Seeder
         'Area X: Administration',
     ];
 
-    /**
-     * Run the database seeds.
-     */
-    public function run(): void
+    public function run(AaccupStructureService $structure): void
     {
-        $cycles = AccreditationCycle::all();
-
-        if ($cycles->isEmpty()) {
-            return;
-        }
-
-        foreach ($cycles as $cycle) {
-            foreach (self::DEFAULT_AREAS as $areaName) {
-                AccreditationArea::firstOrCreate(
-                    [
-                        'cycle_id' => $cycle->id,
-                        'name' => $areaName,
-                    ],
-                    [
-                        'description' => null,
-                        'chair_id' => null,
-                        'status' => 'Not Started',
-                    ]
-                );
-            }
-        }
+        AccreditationCycle::query()->each(fn (AccreditationCycle $cycle) => $structure->seedCycleAreas($cycle));
     }
 }

@@ -23,13 +23,12 @@ class ProgramPolicy
         }
 
         if ($user->isDean()) {
-            return $program->college_id === $user->getEffectiveCollegeId();
+            return $program->college_id === $user->college_id;
         }
 
         if ($user->isProgramChair()) {
             return $program->chair_id === $user->id
-                || $this->hasProgramMembership($user, $program)
-                || $program->id === $user->getEffectiveProgramId();
+                || $user->belongsToProgram($program->id);
         }
 
         if ($user->isAreaIncharge()) {
@@ -44,7 +43,7 @@ class ProgramPolicy
         }
 
         if ($user->isFaculty()) {
-            return $this->hasProgramMembership($user, $program);
+            return $user->belongsToProgram($program->id);
         }
 
         return false;
@@ -72,7 +71,7 @@ class ProgramPolicy
         }
 
         if ($user->isDean()) {
-            return $program->college_id === $user->getEffectiveCollegeId();
+            return $program->college_id === $user->college_id;
         }
 
         // Allow program chair to update their own program's accreditation setup
@@ -85,7 +84,6 @@ class ProgramPolicy
 
     protected function hasProgramMembership(User $user, Program $program): bool
     {
-        return $user->programMemberships()->where('program_id', $program->id)->exists()
-            || $user->getEffectiveProgramId() === $program->id;
+        return $user->belongsToProgram($program->id);
     }
 }

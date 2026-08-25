@@ -31,6 +31,10 @@ return [
 
     'document_upload_max_kb' => (int) env('DOCUMENT_UPLOAD_MAX_KB', 51200),
 
+    'area_document_upload_max_kb' => (int) env('AREA_DOCUMENT_UPLOAD_MAX_KB', 10240),
+
+    'area_document_max_files_per_row' => (int) env('AREA_DOCUMENT_MAX_FILES_PER_ROW', 5),
+
     'media_upload_max_kb' => (int) env('MEDIA_UPLOAD_MAX_KB', 1048576),
 
     'chunk_size_bytes' => (int) env('UPLOAD_CHUNK_SIZE_BYTES', 8 * 1024 * 1024),

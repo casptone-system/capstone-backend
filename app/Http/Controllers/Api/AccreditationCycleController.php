@@ -9,6 +9,10 @@ use App\Models\Program;
 use App\Models\User;
 use App\Notifications\AccreditationCycleNoticeNotification;
 use App\Services\AccreditationLevelStatusService;
+use App\Support\ActiveCycle;
+use App\Support\OrgScope;
+use App\Support\RoleGate;
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use InvalidArgumentException;
@@ -20,9 +24,12 @@ class AccreditationCycleController extends Controller
      */
     public function index(Request $request)
     {
-        $query = AccreditationCycle::with('program');
+        $user = $request->user();
+        $query = AccreditationCycle::with('program.college');
+        OrgScope::constrainCycles($query, $user);
 
         if ($request->filled('program_id')) {
+            abort_unless(OrgScope::canSeeProgram($user, (int) $request->program_id), 403, 'You are not allowed to view this program.');
             $query->where('program_id', $request->program_id);
         }
 
@@ -40,6 +47,18 @@ class AccreditationCycleController extends Controller
                     ->orWhere('status', 'like', "%{$request->search}%")
                     ->orWhere('remarks', 'like', "%{$request->search}%");
             });
+        }
+
+        if ($request->boolean('active_only') && ! $request->filled('level')) {
+            $cycles = ActiveCycle::uniquePerProgram(
+                $query->orderByDesc('created_at')->get()
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Accreditation cycles retrieved successfully.',
+                'data' => AccreditationCycleResource::collection($cycles),
+            ], 200);
         }
 
         $cycles = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 15));
@@ -91,10 +110,11 @@ class AccreditationCycleController extends Controller
         $validated['college_id'] = $program->college_id;
 
         $cycle = AccreditationCycle::create($validated);
+        app(\App\Services\AaccupStructureService::class)->seedCycleAreas($cycle);
 
         $dean = User::where('college_id', $program->college_id)
             ->whereHas('roles', function ($query) {
-                $query->where('name', 'Dean')->orWhere('name', 'dean');
+                $query->where('name', RoleSlug::DEAN);
             })
             ->first();
 
@@ -114,7 +134,7 @@ class AccreditationCycleController extends Controller
      */
     public function show(AccreditationCycle $accreditationCycle)
     {
-        $accreditationCycle->load('program');
+        $accreditationCycle->load('program.college');
 
         return response()->json([
             'success' => true,
@@ -128,6 +148,8 @@ class AccreditationCycleController extends Controller
      */
     public function update(Request $request, AccreditationCycle $accreditationCycle)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $validated = $request->validate([
             'college_id' => ['sometimes', 'required', 'exists:colleges,id'],
             'program_id' => ['sometimes', 'required', 'exists:programs,id'],
@@ -142,8 +164,19 @@ class AccreditationCycleController extends Controller
         ]);
 
         $actor = $request->user();
-        if (! $actor?->isProgramChair()) {
+        $isVpaa = $actor?->isVPAA() || $actor?->isSuperAdmin();
+        $isChair = $actor?->isProgramChair();
+
+        if (! $isVpaa && ! $isChair) {
+            abort(403, 'You are not allowed to update this accreditation cycle.');
+        }
+
+        if (! $isChair && ! $actor?->isSuperAdmin()) {
             unset($validated['level'], $validated['phase']);
+        }
+
+        if (! $isVpaa) {
+            unset($validated['scheduled_visit'], $validated['valid_until'], $validated['instrument_name']);
         }
 
         if (array_key_exists('program_id', $validated) || array_key_exists('college_id', $validated)) {
@@ -173,8 +206,10 @@ class AccreditationCycleController extends Controller
     /**
      * Remove the specified accreditation cycle.
      */
-    public function destroy(AccreditationCycle $accreditationCycle)
+    public function destroy(Request $request, AccreditationCycle $accreditationCycle)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $accreditationCycle->delete();
 
         return response()->json([
@@ -271,7 +306,8 @@ class AccreditationCycleController extends Controller
     }
 
     /**
-     * Allow Program Chair to update accreditation Level, Phase, and Dates (program setup)
+     * Allow Program Chair to update accreditation Level and Phase (program setup).
+     * Schedule and validity dates are set by the VPAA/DI, not the chair.
      */
     public function programChairSetupInfo(Request $request, AccreditationCycle $accreditationCycle)
     {
@@ -289,9 +325,9 @@ class AccreditationCycleController extends Controller
         $validated = $request->validate([
             'level' => ['required', 'in:' . implode(',', AccreditationCycle::LEVELS)],
             'phase' => ['nullable', 'string', 'max:255'],
-            'scheduled_visit' => ['nullable', 'date'],
-            'valid_until' => ['nullable', 'date'],
         ]);
+
+        unset($validated['scheduled_visit'], $validated['valid_until']);
 
         $before = [
             'level' => $accreditationCycle->level,
@@ -349,6 +385,39 @@ class AccreditationCycleController extends Controller
         ], 200);
     }
 
+    /**
+     * VPAA/DI sets the accreditation visit date and validity window for a program cycle.
+     */
+    public function setSchedule(Request $request, AccreditationCycle $accreditationCycle)
+    {
+        RoleGate::assertCanSetAccreditationSchedule($request->user());
+
+        $validated = $request->validate([
+            'scheduled_visit' => ['nullable', 'date'],
+            'valid_until' => ['nullable', 'date'],
+        ]);
+
+        if (! empty($validated['scheduled_visit']) && ! empty($validated['valid_until'])) {
+            if ($validated['valid_until'] < $validated['scheduled_visit']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Valid until must be on or after the scheduled visit date.',
+                    'errors' => [
+                        'valid_until' => ['Valid until must be on or after the scheduled visit date.'],
+                    ],
+                ], 422);
+            }
+        }
+
+        $accreditationCycle->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Accreditation schedule and validity were updated.',
+            'data' => new AccreditationCycleResource($accreditationCycle->fresh('program.college')),
+        ], 200);
+    }
+
     public function deanValidate(Request $request, AccreditationCycle $accreditationCycle)
     {
         $user = $request->user();
@@ -403,10 +472,72 @@ class AccreditationCycleController extends Controller
 
         $collegeId = $accreditationCycle->college_id ?? $accreditationCycle->program?->college_id;
         if (! $collegeId || (int) $user->college_id !== (int) $collegeId) {
-            if (! $user->college_id && $user->getEffectiveCollegeId() !== $collegeId) {
-                abort(403, 'This dean is not assigned to this college.');
-            }
+            abort(403, 'This dean is not assigned to this college.');
         }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeVpaaCycle(AccreditationCycle $cycle): array
+    {
+        $program = $cycle->program;
+        $college = $program?->college;
+        $documentCount = $program ? \App\Models\Document::where('program_id', $program->id)->count() : 0;
+        $totalAreas = \App\Models\AccreditationArea::where('cycle_id', $cycle->id)->whereNotNull('code')->count();
+        $evidenceScore = $totalAreas > 0
+            ? (int) round(($documentCount / max(1, $totalAreas)) * 100)
+            : 0;
+
+        $riskReasons = [];
+        if ($cycle->isValidityExpired()) {
+            $riskReasons[] = 'Accreditation validity has expired';
+        }
+        if ($cycle->status === 'Internal Review') {
+            $riskReasons[] = 'Still in internal review';
+        }
+        if ($cycle->phase === 'VPAA Monitoring' || $cycle->workflow_status === 'VPAA Monitoring') {
+            $riskReasons[] = 'Awaiting VPAA monitoring';
+        }
+        if (
+            $cycle->scheduled_visit
+            && $cycle->scheduled_visit->lt(now()->startOfDay())
+            && ! in_array($cycle->status, ['Ready', 'Completed'], true)
+        ) {
+            $riskReasons[] = 'Visit date has passed while preparation is incomplete';
+        }
+
+        $daysUntilVisit = $cycle->scheduled_visit
+            ? (int) now()->startOfDay()->diffInDays($cycle->scheduled_visit, false)
+            : null;
+
+        return [
+            'id' => $cycle->id,
+            'program' => $program?->name ?? 'Unknown Program',
+            'college' => $college?->name ?? 'Unknown College',
+            'level' => $cycle->level,
+            'phase' => $cycle->phase ?? 'Initial Notice',
+            'status' => $cycle->status,
+            'display_status' => $cycle->display_status,
+            'workflow_status' => $cycle->workflow_status,
+            'preparation_status' => $cycle->preparation_status,
+            'validity_status' => $cycle->validity_status,
+            'scheduled_visit' => $cycle->scheduled_visit?->toDateString(),
+            'valid_until' => $cycle->valid_until?->toDateString(),
+            'accreditation_date' => $cycle->scheduled_visit?->toDateString(),
+            'deadline' => $cycle->valid_until?->toDateString(),
+            'readiness' => (int) min(100, max(0, $evidenceScore ?: ($cycle->status === 'Ready' ? 100 : 0))),
+            'readiness_label' => $cycle->readiness,
+            'evidence_completion' => $evidenceScore,
+            'days_until_visit' => $daysUntilVisit,
+            'at_risk' => $riskReasons !== [],
+            'risk' => $riskReasons[0] ?? null,
+            'risk_reasons' => $riskReasons,
+            'program_id' => $program?->id,
+            'college_id' => $college?->id,
+            'created_at' => $cycle->created_at?->toDateTimeString(),
+            'updated_at' => $cycle->updated_at?->toDateTimeString(),
+        ];
     }
 
     /**
@@ -504,10 +635,12 @@ class AccreditationCycleController extends Controller
             abort(403, 'Only VPAA/DI users can access the institutional dashboard.');
         }
 
-        $cycles = AccreditationCycle::with(['program.college'])
-            ->orderByDesc('scheduled_visit')
-            ->orderByDesc('created_at')
-            ->get();
+        $cycles = ActiveCycle::uniquePerProgram(
+            AccreditationCycle::with(['program.college'])
+                ->orderByDesc('scheduled_visit')
+                ->orderByDesc('created_at')
+                ->get()
+        );
 
         $upcoming = $cycles->filter(fn ($cycle) => $cycle->scheduled_visit)
             ->sortBy(fn ($cycle) => $cycle->scheduled_visit)
@@ -515,44 +648,11 @@ class AccreditationCycleController extends Controller
 
         $ready = $cycles->filter(fn ($cycle) => in_array($cycle->status, ['Ready', 'Completed'], true))->values();
 
-        $atRisk = $cycles->filter(function ($cycle) {
-            if (in_array($cycle->status, ['Ready', 'Completed', 'Expired'], true)) {
-                return false;
-            }
+        $accreditations = $cycles->map(fn ($cycle) => $this->serializeVpaaCycle($cycle))->values();
 
-            return $cycle->phase === 'VPAA Monitoring'
-                || $cycle->status === 'Internal Review'
-                || $cycle->scheduled_visit && $cycle->scheduled_visit->isPast();
-        })->values();
+        $atRisk = $accreditations->filter(fn ($item) => $item['at_risk'])->values();
 
-        $accreditations = $cycles->map(function ($cycle) {
-            $program = $cycle->program;
-            $college = $program?->college;
-            $evidenceScore = 0;
-            $documentCount = $program ? \App\Models\Document::where('program_id', $program->id)->count() : 0;
-            $totalAreas = $program ? \App\Models\AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))->count() : 0;
-            if ($totalAreas > 0) {
-                $evidenceScore = (int) round(($documentCount / max(1, $totalAreas)) * 100);
-            }
-
-            return [
-                'id' => $cycle->id,
-                'program' => $program?->name ?? 'Unknown Program',
-                'college' => $college?->name ?? 'Unknown College',
-                'level' => $cycle->level,
-                'phase' => $cycle->phase ?? 'Initial Notice',
-                'status' => $cycle->status,
-                'accreditation_date' => $cycle->scheduled_visit?->toDateString(),
-                'deadline' => $cycle->valid_until?->toDateString(),
-                'readiness' => (int) min(100, max(0, $evidenceScore ?: ($cycle->status === 'Ready' ? 100 : 0))),
-                'readiness_label' => $cycle->readiness,
-                'evidence_completion' => $evidenceScore,
-                'program_id' => $program?->id,
-                'college_id' => $college?->id,
-                'created_at' => $cycle->created_at?->toDateTimeString(),
-                'updated_at' => $cycle->updated_at?->toDateTimeString(),
-            ];
-        })->values();
+        $expiredValidity = $accreditations->filter(fn ($item) => $item['validity_status'] === 'Expired')->values();
 
         $notifications = $user->notifications()->orderByDesc('created_at')->limit(10)->get()->map(function ($notification) {
             $data = $notification->data ?? [];
@@ -580,6 +680,7 @@ class AccreditationCycleController extends Controller
             'upcoming_accreditations' => $upcoming->count(),
             'ready_programs' => $ready->count(),
             'at_risk_programs' => $atRisk->count(),
+            'expired_validity' => $expiredValidity->count(),
             'overall_readiness' => $cycles->count() > 0
                 ? (int) round($ready->count() / $cycles->count() * 100)
                 : 0,
@@ -592,28 +693,32 @@ class AccreditationCycleController extends Controller
                 'summary' => $summary,
                 'accreditations' => $accreditations,
                 'upcoming' => $upcoming->map(fn ($cycle) => [
+                    'id' => $cycle->id,
                     'program' => $cycle->program?->name,
+                    'program_id' => $cycle->program_id,
                     'college' => $cycle->program?->college?->name,
                     'level' => $cycle->level,
                     'phase' => $cycle->phase ?? 'Initial Notice',
+                    'preparation_status' => $cycle->preparation_status,
+                    'validity_status' => $cycle->validity_status,
                     'accreditation_date' => $cycle->scheduled_visit?->toDateString(),
+                    'scheduled_visit' => $cycle->scheduled_visit?->toDateString(),
+                    'valid_until' => $cycle->valid_until?->toDateString(),
                     'status' => $cycle->status,
                 ])->values(),
-                'at_risk' => $atRisk->map(fn ($cycle) => [
-                    'program' => $cycle->program?->name,
-                    'college' => $cycle->program?->college?->name,
-                    'level' => $cycle->level,
-                    'phase' => $cycle->phase ?? 'Initial Notice',
-                    'status' => $cycle->status,
-                    'risk' => 'Requires VPAA attention',
-                ])->values(),
+                'at_risk' => $atRisk->values(),
                 'readiness' => [
                     'overall' => $summary['overall_readiness'],
                     'programs' => $accreditations->map(fn ($item) => [
+                        'id' => $item['id'],
                         'program' => $item['program'],
                         'college' => $item['college'],
+                        'level' => $item['level'],
                         'readiness' => $item['readiness'],
                         'phase' => $item['phase'],
+                        'preparation_status' => $item['preparation_status'],
+                        'validity_status' => $item['validity_status'],
+                        'valid_until' => $item['valid_until'],
                     ])->values(),
                 ],
                 'notifications' => $notifications,

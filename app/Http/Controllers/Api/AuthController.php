@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
+use App\Support\RoleSlug;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -439,12 +440,7 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $isSuperAdmin = $creator && (
-            $creator->hasRole('Super Administrator') ||
-            $creator->hasRole('Super Admin') ||
-            $creator->hasRole('super administrator') ||
-            $creator->hasRole('superadmin')
-        );
+        $isSuperAdmin = $creator && $creator->isSuperAdmin();
 
         $profilePhotoRules = ['nullable', 'image', 'max:10240'];
         if ($isSuperAdmin) {
@@ -517,12 +513,7 @@ class AuthController extends Controller
 
         // Determine creator and whether they're a super admin
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $isSuperAdmin = $creator && (
-            $creator->hasRole('Super Administrator') ||
-            $creator->hasRole('Super Admin') ||
-            $creator->hasRole('super administrator') ||
-            $creator->hasRole('superadmin')
-        );
+        $isSuperAdmin = $creator && $creator->isSuperAdmin();
 
         // Public self-registration is allowed, but authenticated non-super-admins may not create users.
         if ($creator && ! $isSuperAdmin) {
@@ -549,24 +540,24 @@ class AuthController extends Controller
             // - Only authenticated Super Administrators may create accounts with an elevated role.
             // - Otherwise default to the standard faculty role.
             $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-            $role = 'faculty';
-            $isSuperAdmin = $creator && (
-                $creator->hasRole('Super Administrator') ||
-                    $creator->hasRole('Super Admin') ||
-                    $creator->hasRole('super administrator') ||
-                    $creator->hasRole('superadmin')
-            );
+            $role = RoleSlug::FACULTY;
+            $isSuperAdmin = $creator && $creator->isSuperAdmin();
 
             if (! empty($validated['role']) && $isSuperAdmin) {
-                $role = $validated['role'];
+                $role = RoleSlug::canonicalize($validated['role']) ?? RoleSlug::FACULTY;
             }
 
-            $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
-            $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+            $roleModel = Role::firstOrCreate(['name' => $role, 'guard_name' => 'web']);
             $user->assignRole($roleModel);
-            
-            // Assign default permissions to the role if it's newly created
-            $this->assignDefaultPermissionsToRole($roleModel, $roleName);
+            $this->assignDefaultPermissionsToRole($roleModel, $role);
+
+            if (RoleSlug::isInstitutionWide($role)) {
+                $user->forceFill([
+                    'college_id' => null,
+                    'program_id' => null,
+                    'team_id' => null,
+                ])->save();
+            }
 
             // DISABLED: Email verification notification — temporarily off for dev, see [2026-08-18]
             // Instead of sending verification email, auto-mark email as verified:
@@ -586,26 +577,8 @@ class AuthController extends Controller
             throw $e;
         }
 
-        // Role assignment rules:
-        // - Only authenticated Super Administrators may create accounts with an elevated role.
-        // - Otherwise default to the standard faculty role.
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $role = 'faculty';
-        $isSuperAdmin = $creator && (
-            $creator->hasRole('Super Administrator') ||
-                $creator->hasRole('Super Admin') ||
-                $creator->hasRole('super administrator') ||
-                $creator->hasRole('superadmin')
-        );
-
-        if (! empty($validated['role']) && $isSuperAdmin) {
-            $role = $validated['role'];
-        }
-
-        $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
-        $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
-        // Ensure permissions are assigned (in case role was just created)
-        $this->assignDefaultPermissionsToRole($roleModel, $roleName);
+        $isSuperAdmin = $creator && $creator->isSuperAdmin();
 
         $token = null;
         if ($creator && $isSuperAdmin) {
@@ -746,12 +719,17 @@ class AuthController extends Controller
         // First try to resolve to a Team by code
         $code = strtoupper($validated['code']);
 
-        $team = \App\Models\Team::where('code', $code)->first();
+        $team = \App\Models\Team::with('program')->where('code', $code)->first();
 
         if ($team) {
-            // Assign team and program to user
+            $this->assertCanJoinProgram($user, (int) $team->program_id);
+
+            // Membership source of truth is users.program_id.
             $user->team_id = $team->id;
             $user->program_id = $team->program_id;
+            if (! $user->isDean()) {
+                $user->college_id = $team->program?->college_id;
+            }
             $user->save();
 
             return response()->json([
@@ -775,7 +753,12 @@ class AuthController extends Controller
         $program = \App\Models\Program::where('code', $code)->first();
 
         if ($program) {
+            $this->assertCanJoinProgram($user, (int) $program->id);
+
             $user->program_id = $program->id;
+            if (! $user->isDean()) {
+                $user->college_id = $program->college_id;
+            }
             $user->save();
 
             return response()->json([
@@ -798,5 +781,23 @@ class AuthController extends Controller
             'success' => false,
             'message' => 'Invalid invitation code. Please check with your Program Chair or Dean.',
         ], 404);
+    }
+
+    private function assertCanJoinProgram($user, int $programId): void
+    {
+        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor()) {
+            abort(403, 'Institution-wide roles are not assigned to a program via team code.');
+        }
+
+        if ($user->isDean()) {
+            abort(403, 'Deans are assigned to a college, not via team code.');
+        }
+
+        if ($user->isProgramChair()) {
+            $chairedId = $user->chairedProgramId();
+            if ($chairedId && $chairedId !== $programId) {
+                abort(422, 'You already chair a different program.');
+            }
+        }
     }
 }

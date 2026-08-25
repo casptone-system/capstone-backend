@@ -13,7 +13,7 @@ class InstrumentTemplateController extends Controller
 {
     public function index(Request $request)
     {
-        $this->assertCanManageTemplates($request->user());
+        $this->assertCanViewTemplates($request->user());
 
         $templates = InstrumentTemplate::with(['areas.parameters.criteria'])
             ->orderBy('level')
@@ -24,7 +24,7 @@ class InstrumentTemplateController extends Controller
 
     public function show(Request $request, InstrumentTemplate $instrumentTemplate)
     {
-        $this->assertCanManageTemplates($request->user());
+        $this->assertCanViewTemplates($request->user());
 
         return response()->json([
             'success' => true,
@@ -118,10 +118,17 @@ class InstrumentTemplateController extends Controller
         return response()->json(['success' => true, 'message' => 'Area removed from template.']);
     }
 
-    private function assertCanManageTemplates(?User $user): void
+    private function assertCanViewTemplates(?User $user): void
     {
         if (! $user || (! $user->isVPAA() && ! $user->isQA() && ! $user->isSuperAdmin())) {
-            abort(403, 'Only QA or VPAA/DI can manage accreditation templates.');
+            abort(403, 'Only QA or VPAA/DI can view accreditation templates.');
+        }
+    }
+
+    private function assertCanManageTemplates(?User $user): void
+    {
+        if (! $user || (! $user->isVPAA() && ! $user->isSuperAdmin())) {
+            abort(403, 'Only the VPAA/DI can manage accreditation templates.');
         }
     }
 }

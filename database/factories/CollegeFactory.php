@@ -20,6 +20,7 @@ class CollegeFactory extends Factory
         return [
             'name' => fake()->company() . ' College',
             'code' => strtoupper(fake()->unique()->word()),
+            'campus' => config('institution.campus', 'Echague Main Campus'),
             'description' => fake()->sentence(),
         ];
     }

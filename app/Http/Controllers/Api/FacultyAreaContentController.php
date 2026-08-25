@@ -12,6 +12,9 @@ use App\Models\ParameterContentRow;
 use App\Models\ParameterRowStatus;
 use App\Models\User;
 use App\Services\AreaProgressService;
+use App\Services\EvidenceStorage;
+use App\Support\ActiveCycle;
+use App\Support\AreaEvidenceGate;
 use App\Support\AreaParameterCatalog;
 use Illuminate\Http\Request;
 
@@ -22,7 +25,7 @@ class FacultyAreaContentController extends Controller
         $user = $request->user();
         $areaIds = $user->assignedAreaIds();
 
-        $areas = AccreditationArea::with(['chair', 'cycle.program', 'members'])
+        $areas = AccreditationArea::with(['chair', 'cycle.program', 'members', 'reviews'])
             ->whereIn('id', $areaIds)
             ->whereNotNull('code')
             ->orderBy('code')
@@ -42,6 +45,8 @@ class FacultyAreaContentController extends Controller
             })->values();
         }
 
+        $areas = ActiveCycle::uniqueAreasPerProgram($areas);
+
         return response()->json([
             'success' => true,
             'message' => 'Assigned areas retrieved successfully.',
@@ -54,13 +59,18 @@ class FacultyAreaContentController extends Controller
 
     public function qaAreas(Request $request)
     {
-        $this->assertCanEditContent($request->user());
+        $this->assertCanViewInstitutionAreas($request->user());
 
         $areas = AccreditationArea::with(['chair', 'cycle.program'])
             ->whereNotNull('code')
-            ->orderBy('code')
             ->orderBy('id')
             ->get();
+
+        if ($request->boolean('catalog')) {
+            $areas = $this->uniqueCatalogAreas($areas);
+        } else {
+            $areas = ActiveCycle::uniqueAreasPerProgram($areas);
+        }
 
         return response()->json([
             'success' => true,
@@ -75,7 +85,12 @@ class FacultyAreaContentController extends Controller
 
         AreaParameterCatalog::ensureSeeded($accreditationArea);
 
-        $parameters = $accreditationArea->parameters()->orderBy('sort_order')->orderBy('id')->get();
+        $parameters = $accreditationArea->parameters()
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->unique('code')
+            ->values();
 
         return response()->json([
             'success' => true,
@@ -116,7 +131,7 @@ class FacultyAreaContentController extends Controller
         AreaParameterCatalog::ensureSeeded($parameter->area);
 
         $rows = $parameter->contentRows()
-            ->with(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])
+            ->with(['status.doneBy', 'documents.versions', 'documents.uploader'])
             ->get();
 
         return response()->json([
@@ -149,7 +164,7 @@ class FacultyAreaContentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Parameter content row created successfully.',
-            'data' => new ParameterContentRowResource($row->load(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])),
+            'data' => new ParameterContentRowResource($row->load(['status.doneBy', 'documents.versions', 'documents.uploader'])),
         ], 201);
     }
 
@@ -174,7 +189,7 @@ class FacultyAreaContentController extends Controller
         );
 
         $parameterContentRow->setRelation('status', $status->load('doneBy'));
-        $parameterContentRow->loadMissing(['latestDocument.versions', 'latestDocument.uploader']);
+        $parameterContentRow->loadMissing(['documents.versions', 'documents.uploader']);
 
         app(AreaProgressService::class)->refresh($parameterContentRow->parameter?->area);
 
@@ -202,7 +217,7 @@ class FacultyAreaContentController extends Controller
             'success' => true,
             'message' => 'Row content updated successfully.',
             'data' => new ParameterContentRowResource(
-                $parameterContentRow->load(['status.doneBy', 'latestDocument.versions', 'latestDocument.uploader'])
+                $parameterContentRow->load(['status.doneBy', 'documents.versions', 'documents.uploader'])
             ),
         ]);
     }
@@ -223,6 +238,61 @@ class FacultyAreaContentController extends Controller
             'success' => true,
             'message' => 'Parameter content row deleted successfully.',
         ]);
+    }
+
+    public function destroyRowDocuments(Request $request, ParameterContentRow $parameterContentRow)
+    {
+        $parameterContentRow->load('parameter.area', 'documents.versions');
+        AreaEvidenceGate::assertCanManageEvidence($request->user(), $parameterContentRow->parameter?->area);
+
+        $storage = app(EvidenceStorage::class);
+
+        foreach ($parameterContentRow->documents as $document) {
+            $this->authorize('delete', $document);
+            $storage->deleteDirectory("documents/{$document->id}");
+            $document->delete();
+        }
+
+        app(AreaProgressService::class)->refresh($parameterContentRow->parameter?->area);
+
+        $parameterContentRow->unsetRelation('documents');
+        $parameterContentRow->load(['status.doneBy', 'documents.versions', 'documents.uploader']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'All files for this row were removed.',
+            'data' => new ParameterContentRowResource($parameterContentRow),
+        ]);
+    }
+
+    /**
+     * One AACCUP area per code, preferring the program's active cycle copy.
+     *
+     * @param  \Illuminate\Support\Collection<int, AccreditationArea>  $areas
+     * @return \Illuminate\Support\Collection<int, AccreditationArea>
+     */
+    private function uniqueCatalogAreas($areas)
+    {
+        return $areas
+            ->sortBy(function (AccreditationArea $area) {
+                $activeId = (int) ($area->cycle?->program?->active_cycle_id ?? 0);
+                $isActive = $activeId > 0 && (int) $area->cycle_id === $activeId;
+
+                return sprintf(
+                    '%03d-%d-%010d',
+                    $this->areaNumber($area->code),
+                    $isActive ? 0 : 1,
+                    $area->id
+                );
+            })
+            ->unique(fn (AccreditationArea $area) => (string) $area->code)
+            ->sortBy(fn (AccreditationArea $area) => sprintf('%03d-%010d', $this->areaNumber($area->code), $area->id))
+            ->values();
+    }
+
+    private function areaNumber(?string $code): int
+    {
+        return preg_match('/area-(\d+)/i', (string) $code, $matches) ? (int) $matches[1] : 999;
     }
 
     private function assertCanViewArea(?User $user, ?AccreditationArea $area): void
@@ -249,10 +319,17 @@ class FacultyAreaContentController extends Controller
         }
     }
 
-    private function assertCanEditContent(?User $user): void
+    private function assertCanViewInstitutionAreas(?User $user): void
     {
         if (! $user || ! ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin())) {
-            abort(403, 'Only QA or VPAA/DI may edit parameter content.');
+            abort(403, 'Only QA or VPAA/DI may list all accreditation areas.');
+        }
+    }
+
+    private function assertCanEditContent(?User $user): void
+    {
+        if (! $user || ! ($user->isVPAA() || $user->isSuperAdmin())) {
+            abort(403, 'Only the VPAA/DI may edit parameter content.');
         }
     }
 }

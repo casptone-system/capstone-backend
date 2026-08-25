@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\CollegeResource;
 use App\Models\College;
 use App\Models\User;
-use App\Models\Invitation;
+use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -27,8 +27,8 @@ class CollegeController extends Controller
 
     public function index(Request $request)
     {
-        $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! ($user->isSuperAdmin() || $user->isQA() || $user->isVPAA())) {
             return response()->json(['success' => false, 'message' => 'You do not have permission to view colleges.'], 403);
         }
 
@@ -53,70 +53,42 @@ class CollegeController extends Controller
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'code' => ['required', 'string', 'max:50', 'unique:colleges,code'],
+            'campus' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
         ]);
+        $validated['campus'] = $validated['campus'] ?? config('institution.campus');
 
         $deanPayload = $request->input('dean');
 
-        $inviteFailure = null;
-        $result = DB::transaction(function () use ($validated, $deanPayload, $actor, &$inviteFailure) {
+        $result = DB::transaction(function () use ($validated, $deanPayload, $actor) {
             $college = College::create($validated);
 
             $createdDean = null;
-            $invitation = null;
 
             if (is_array($deanPayload) && ! empty($deanPayload['email'])) {
                 $email = $deanPayload['email'];
                 $name = $deanPayload['name'] ?? null;
-                $autoCreate = isset($deanPayload['auto_create']) ? (bool) $deanPayload['auto_create'] : false;
 
-                if ($autoCreate) {
-                    $password = Str::random(12);
-                    $user = User::create([
-                        'name' => $name ?? $email,
-                        'email' => $email,
-                        'password' => Hash::make($password),
-                        'college_id' => $college->id,
-                    ]);
-
-                    // assign dean role if roles exist
-                    try {
-                        $user->assignRole('dean');
-                    } catch (\Throwable $e) {
-                        // ignore role assignment failures
-                    }
-
-                    // send verification/invite email if applicable
-                    try {
-                        $user->sendEmailVerificationNotification();
-                    } catch (\Throwable $e) {
-                        // best-effort
-                    }
-
-                    $createdDean = $user;
-                } else {
-                    $token = bin2hex(random_bytes(24));
-                    try {
-                        $invitation = Invitation::create([
-                            'program_id' => null,
-                            'team_id' => null,
-                            'email' => $email,
-                            'role' => 'dean',
-                            'token' => $token,
-                            'invited_by' => $actor->id,
-                            'expires_at' => now()->addDays(3),
-                            'status' => 'pending',
-                        ]);
-                    } catch (\Throwable $e) {
-                        // mark failure so we can persist an audit log after the main transaction
-                        $inviteFailure = $e->getMessage();
-                        // don't throw — allow transaction to complete (invitation was not created)
-                        $invitation = null;
-                    }
+                $duplicateDean = User::where('college_id', $college->id)
+                    ->whereHas('roles', fn ($q) => $q->where('name', RoleSlug::DEAN))
+                    ->exists();
+                if ($duplicateDean) {
+                    abort(422, 'This college already has an active Dean.');
                 }
+
+                $password = Str::random(12);
+                $user = User::create([
+                    'name' => $name ?? $email,
+                    'email' => $email,
+                    'password' => Hash::make($password),
+                    'college_id' => $college->id,
+                ]);
+
+                $user->assignRole(RoleSlug::DEAN);
+                $createdDean = $user;
             }
 
-            return ['college' => $college, 'dean' => $createdDean, 'invitation' => $invitation];
+            return ['college' => $college, 'dean' => $createdDean];
         });
 
         $college = $result['college'];
@@ -134,43 +106,13 @@ class CollegeController extends Controller
                 'ip_address' => request()->ip(),
             ]);
         }
-        if ($result['invitation']) {
-            $response['invitation'] = ['token' => $result['invitation']->token, 'email' => $result['invitation']->email];
-            \App\Models\AuditLog::create([
-                'user_id' => $actor->id,
-                'user_email' => $actor->email,
-                'event' => 'INVITE_DEAN',
-                'method' => 'POST',
-                'path' => "api/invitations/{$result['invitation']->token}",
-                'status' => 'success',
-                'ip_address' => request()->ip(),
-            ]);
-        }
-
-        // If an invitation attempt failed earlier during the transaction, record an audit entry
-        if (!empty($inviteFailure)) {
-            try {
-                \App\Models\AuditLog::create([
-                    'user_id' => $actor->id,
-                    'user_email' => $actor->email,
-                    'event' => 'INVITE_DEAN_FAILED',
-                    'method' => 'POST',
-                    'path' => request()->path(),
-                    'status' => 'error',
-                    'ip_address' => request()->ip(),
-                ]);
-            } catch (\Throwable $_) {
-            }
-            $response['invitation_error'] = $inviteFailure;
-        }
-
         return response()->json($response, 201);
     }
 
     public function show(Request $request, College $college)
     {
-        $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! ($user->isSuperAdmin() || $user->isQA() || $user->isVPAA())) {
             return response()->json(['success' => false, 'message' => 'You do not have permission to view this college.'], 403);
         }
 
@@ -193,6 +135,7 @@ class CollegeController extends Controller
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'code' => ['sometimes', 'required', 'string', 'max:50', 'unique:colleges,code,' . $college->id],
+            'campus' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
         ]);
 

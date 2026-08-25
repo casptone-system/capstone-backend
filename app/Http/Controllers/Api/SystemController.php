@@ -13,12 +13,7 @@ class SystemController extends Controller
     {
         $user = $request->user('api') ?? $request->user();
 
-        if (! $user || ! (
-            $user->hasRole('Super Administrator') ||
-            $user->hasRole('Super Admin') ||
-            $user->hasRole('super administrator') ||
-            $user->hasRole('superadmin')
-        )) {
+        if (! $user || ! $user->isSuperAdmin()) {
             return null;
         }
 
@@ -36,6 +31,10 @@ class SystemController extends Controller
             'success' => true,
             'message' => 'System settings retrieved successfully.',
             'data' => [
+                'institution' => config('institution.name'),
+                'campus' => config('institution.campus'),
+                'respondent_unit' => config('institution.respondent_unit'),
+                'respondent_unit_code' => config('institution.respondent_unit_code'),
                 'backup_enabled' => true,
                 'email_configured' => true,
                 'notifications_enabled' => true,

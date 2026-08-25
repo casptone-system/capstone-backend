@@ -43,18 +43,8 @@ class ProgramActiveLevelController extends Controller
                 ], 422);
             }
         } elseif (! empty($validated['level'])) {
-            $cycle = $program->accreditationCycles()
-                ->where('level', $validated['level'])
-                ->latest('created_at')
-                ->first();
-
-            if (! $cycle) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No cycle yet for '.$validated['level'].'.',
-                    'data' => $this->serialize($program),
-                ], 422);
-            }
+            $cycle = app(\App\Services\AaccupStructureService::class)
+                ->ensureCycle($program, $validated['level']);
         }
 
         $program->active_cycle_id = $cycle?->id;

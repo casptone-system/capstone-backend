@@ -9,6 +9,7 @@ use App\Models\RoleStorageFolder;
 use App\Models\Task;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
+use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -380,6 +381,10 @@ class RoleStorageController extends Controller
 
         if ($area) {
             AreaEvidenceGate::assertCanUpload($request->user(), $area);
+            AreaDocumentRules::assertPdfMeta($file->original_name ?? $file->name, $file->mime_type, $file->file_size);
+            AreaDocumentRules::assertRowHasCapacity(
+                isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
+            );
 
             if ((int) $area->cycle?->program_id !== (int) $validated['program_id']) {
                 return response()->json([

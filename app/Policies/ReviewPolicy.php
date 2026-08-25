@@ -22,11 +22,11 @@ class ReviewPolicy
         }
 
         if ($user->isProgramChair()) {
-            return $review->cycle->program_id === $user->getEffectiveProgramId();
+            return $review->cycle->program_id === $user->assignedProgramId();
         }
 
         if ($user->isDean()) {
-            return $review->cycle->program?->college_id === $user->getEffectiveCollegeId();
+            return $review->cycle->program?->college_id === $user->college_id;
         }
 
         if ($user->isQA() || $user->isVPAA()) {
@@ -38,12 +38,15 @@ class ReviewPolicy
 
     public function submit(User $user, Review $review): bool
     {
-        if ($review->submitted_by !== $user->id) {
+        if (! in_array($review->current_status, ['Draft', 'Revision Requested'], true)) {
             return false;
         }
 
-        // Allow initial submit from Draft and resubmission from Revision Requested
-        return in_array($review->current_status, ['Draft', 'Revision Requested'], true) && $user->isFaculty();
+        if ($user->isChairOfArea($review->area)) {
+            return true;
+        }
+
+        return $review->submitted_by === $user->id && $user->isFaculty();
     }
 
     public function approve(User $user, Review $review): bool
@@ -79,7 +82,7 @@ class ReviewPolicy
 
     protected function belongsToProgram(User $user, Review $review): bool
     {
-        $programId = $user->getEffectiveProgramId();
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
 
         if (! $programId) {
             return false;
@@ -90,7 +93,7 @@ class ReviewPolicy
 
     protected function belongsToCollege(User $user, Review $review): bool
     {
-        $collegeId = $user->getEffectiveCollegeId();
+        $collegeId = $user->college_id;
 
         if (! $collegeId) {
             return false;

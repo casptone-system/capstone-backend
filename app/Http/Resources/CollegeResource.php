@@ -18,6 +18,7 @@ class CollegeResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'code' => $this->code,
+            'campus' => $this->campus,
             'description' => $this->description,
             'programs' => $this->whenLoaded('programs', fn () => ProgramResource::collection($this->programs)),
         ];

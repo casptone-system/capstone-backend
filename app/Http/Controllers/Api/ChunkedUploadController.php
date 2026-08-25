@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Notifications\DocumentUploadedNotification;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
+use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -68,6 +69,11 @@ class ChunkedUploadController extends Controller
                 if ($document->area_id || $document->content_row_id) {
                     $area = $document->area ?: AreaEvidenceGate::resolveArea($document->area_id, $document->content_row_id);
                     AreaEvidenceGate::assertCanUpload($request->user(), $area);
+                    AreaDocumentRules::assertPdfMeta(
+                        $validated['original_name'],
+                        $validated['mime_type'] ?? null,
+                        (int) $validated['total_size']
+                    );
                 }
             } else {
                 $this->authorize('create', Document::class);
@@ -77,6 +83,16 @@ class ChunkedUploadController extends Controller
                 );
                 if ($area) {
                     AreaEvidenceGate::assertCanUpload($request->user(), $area);
+                    AreaDocumentRules::assertPdfMeta(
+                        $validated['original_name'],
+                        $validated['mime_type'] ?? null,
+                        (int) $validated['total_size']
+                    );
+                    if (empty($validated['document_id'])) {
+                        AreaDocumentRules::assertRowHasCapacity(
+                            isset($validated['content_row_id']) ? (int) $validated['content_row_id'] : null
+                        );
+                    }
                     $validated['area_id'] = $area->id;
                 }
             }

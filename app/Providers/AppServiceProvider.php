@@ -48,7 +48,7 @@ class AppServiceProvider extends ServiceProvider
 
         // Register policies so that controller authorization can use them
         Gate::define('access-college-dashboard', function (User $user): bool {
-            return $user->isDean() && (bool) $user->getEffectiveCollegeId();
+            return $user->isDean() && (bool) $user->college_id;
         });
 
         Gate::define('monitor-college', function (User $user, ?College $college = null): bool {
@@ -56,7 +56,7 @@ class AppServiceProvider extends ServiceProvider
                 return false;
             }
 
-            $effectiveCollegeId = $user->getEffectiveCollegeId();
+            $effectiveCollegeId = $user->college_id;
             if (! $effectiveCollegeId) {
                 return false;
             }

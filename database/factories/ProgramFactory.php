@@ -22,7 +22,7 @@ class ProgramFactory extends Factory
             'college_id' => College::factory(),
             'name' => 'Bachelor of ' . ucfirst(fake()->word()),
             'code' => strtoupper(fake()->unique()->word()),
-            'chair' => 'Dr. ' . fake()->name(),
+            'chair' => null,
             'chair_id' => null,
             'accreditation_status' => fake()->randomElement(['compliant', 'at-risk', 'non-compliant']),
             'compliance_score' => fake()->numberBetween(0, 100),

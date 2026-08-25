@@ -9,6 +9,7 @@ use App\Models\Task;
 use App\Models\TaskAssignment;
 use App\Models\User;
 use App\Notifications\TaskAssignedNotification;
+use App\Support\RoleGate;
 use Illuminate\Http\Request;
 
 class TaskController extends Controller
@@ -59,6 +60,8 @@ class TaskController extends Controller
      */
     public function store(Request $request)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $validated = $request->validate([
             'area_id' => ['required', 'exists:accreditation_areas,id'],
             'title' => ['required', 'string', 'max:255'],
@@ -98,6 +101,8 @@ class TaskController extends Controller
      */
     public function update(Request $request, Task $task)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $validated = $request->validate([
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -118,8 +123,10 @@ class TaskController extends Controller
     /**
      * Remove the specified task.
      */
-    public function destroy(Task $task)
+    public function destroy(Request $request, Task $task)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $task->delete();
 
         return response()->json([
@@ -133,6 +140,8 @@ class TaskController extends Controller
      */
     public function assignMembers(Request $request, Task $task)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $validated = $request->validate([
             'user_ids' => ['required', 'array', 'min:1'],
             'user_ids.*' => ['required', 'exists:users,id'],
@@ -200,8 +209,10 @@ class TaskController extends Controller
     /**
      * Mark the task as completed.
      */
-    public function markComplete(Task $task)
+    public function markComplete(Request $request, Task $task)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $task->update(['status' => 'Completed']);
 
         return response()->json([

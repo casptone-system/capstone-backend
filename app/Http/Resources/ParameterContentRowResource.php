@@ -10,9 +10,15 @@ class ParameterContentRowResource extends JsonResource
     public function toArray(Request $request): array
     {
         $status = $this->relationLoaded('status') ? $this->status : $this->status()->first();
-        $document = $this->relationLoaded('latestDocument')
-            ? $this->latestDocument
-            : $this->latestDocument()->with(['versions', 'uploader'])->first();
+        $documents = collect(
+            $this->relationLoaded('documents')
+                ? $this->documents
+                : $this->documents()->with(['versions', 'uploader'])->orderByDesc('id')->get()
+        )->sortByDesc('id')->values();
+        $document = $documents->first()
+            ?: ($this->relationLoaded('latestDocument')
+                ? $this->latestDocument
+                : $this->latestDocument()->with(['versions', 'uploader'])->first());
 
         return [
             'id' => $this->id,
@@ -24,8 +30,10 @@ class ParameterContentRowResource extends JsonResource
             'doneBy' => $status?->relationLoaded('doneBy') && $status->doneBy
                 ? new UserResource($status->doneBy)
                 : null,
-            'hasFile' => $document !== null,
+            'hasFile' => $documents->isNotEmpty() || $document !== null,
+            'fileCount' => $documents->count() ?: ($document ? 1 : 0),
             'document' => $document ? new DocumentResource($document) : null,
+            'documents' => DocumentResource::collection($documents),
             'updatedAt' => $this->updated_at?->toDateTimeString(),
         ];
     }

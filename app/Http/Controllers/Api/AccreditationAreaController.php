@@ -6,16 +6,24 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\AccreditationAreaResource;
 use App\Http\Resources\AreaMemberResource;
 use App\Http\Resources\DocumentResource;
+use App\Http\Resources\ReviewResource;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
 use App\Models\AreaMember;
 use App\Models\CriterionEvidence;
 use App\Models\Document;
 use App\Models\Program;
+use App\Services\AaccupStructureService;
 use App\Models\Review;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
 use App\Support\AreaAssignmentNotifier;
+use App\Support\AreaDocumentRules;
+use App\Support\OrgScope;
+use App\Support\RoleGate;
+use App\Support\RoleSlug;
+use App\Support\AreaEvidenceGate;
+use App\Services\AreaDeadlineReminderService;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
 use Illuminate\Http\Request;
@@ -63,6 +71,8 @@ class AccreditationAreaController extends Controller
      */
     public function store(Request $request)
     {
+        RoleGate::denyQaMutations($request->user());
+
         $validated = $request->validate([
             'cycle_id' => ['required', 'exists:accreditation_cycles,id'],
             'name' => ['required', 'string', 'max:255'],
@@ -166,12 +176,16 @@ class AccreditationAreaController extends Controller
         }
 
         $assignee = User::findOrFail($newChairId);
+        $programId = (int) $accreditationArea->cycle()->value('program_id');
+        if (! $assignee->belongsToProgram($programId) && ! $assignee->ownsAssignedProgram($programId)) {
+            abort(422, 'The selected user does not belong to this program.');
+        }
 
         $accreditationArea->members()->where('user_id', $newChairId)->delete();
         $accreditationArea->update(['chair_id' => $newChairId]);
 
         if (! $assignee->isAreaIncharge()) {
-            $assignee->assignRole('Area In-Charge');
+            $assignee->assignRole(RoleSlug::AREA_IN_CHARGE);
         }
 
         if ($currentChairId !== $newChairId) {
@@ -228,8 +242,14 @@ class AccreditationAreaController extends Controller
             ], 422);
         }
 
+        $candidate = User::findOrFail($resolvedUserId);
+        $programId = (int) $accreditationArea->cycle()->value('program_id');
+        if (! $candidate->belongsToProgram($programId) && ! $candidate->ownsAssignedProgram($programId)) {
+            abort(422, 'The selected user does not belong to this program.');
+        }
+
         $member = $accreditationArea->members()->create([
-            'user_id' => $resolvedUserId,
+            'user_id' => $candidate->id,
             'role' => $validated['role'] ?? 'member',
         ]);
 
@@ -272,6 +292,8 @@ class AccreditationAreaController extends Controller
      */
     public function removeMember(AccreditationArea $accreditationArea, AreaMember $member)
     {
+        RoleGate::denyQaMutations(request()->user());
+
         if ($member->area_id !== $accreditationArea->id) {
             return response()->json([
                 'success' => false,
@@ -325,19 +347,14 @@ class AccreditationAreaController extends Controller
         $validated = $request->validate([
             'area_id' => 'required|exists:accreditation_areas,id',
             'files' => 'required|array|min:1',
-            'files.*' => 'file|mimes:pdf,doc,docx,xls,xlsx,ppt,pptx|max:10240',
+            'files.*' => 'file|mimes:pdf|max:'.AreaDocumentRules::maxKilobytes(),
             'notes' => 'nullable|string|max:1000',
         ]);
 
         try {
             $area = AccreditationArea::with('cycle.program.chairUser')->findOrFail($validated['area_id']);
 
-            if (! $user->isAssignedToArea($area)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'You are not assigned to this area.',
-                ], 403);
-            }
+            AreaEvidenceGate::assertCanUpload($user, $area);
 
             $programId = $area->cycle?->program_id;
             if (! $programId) {
@@ -349,6 +366,7 @@ class AccreditationAreaController extends Controller
 
             $storedDocuments = [];
             foreach ($request->file('files', []) as $file) {
+                AreaDocumentRules::assertPdfUpload($file);
                 $document = Document::create([
                     'program_id' => $programId,
                     'area_id' => $area->id,
@@ -441,7 +459,7 @@ class AccreditationAreaController extends Controller
             ->unique('level')
             ->values();
 
-        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel) {
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $program) {
             $cycle = $cyclesByLevel->firstWhere('level', $levelName);
 
             if (! $cycle) {
@@ -450,6 +468,23 @@ class AccreditationAreaController extends Controller
                     'cycleId' => null,
                     'cycleStatus' => null,
                     'displayStatus' => 'Not Started',
+                    'assignedCount' => 0,
+                    'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
+                    'areas' => [],
+                ];
+            }
+
+            $activeId = (int) ($program->active_cycle_id ?? 0);
+            $isActive = $activeId
+                ? (int) $cycle->id === $activeId
+                : $levelName === ($program->accreditation_level ?: 'Level I');
+
+            if (! $isActive) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => $cycle->id,
+                    'cycleStatus' => $cycle->status,
+                    'displayStatus' => $cycle->display_status,
                     'assignedCount' => 0,
                     'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
                     'areas' => [],
@@ -504,7 +539,7 @@ class AccreditationAreaController extends Controller
             ->unique('level')
             ->values();
 
-        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $user) {
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $user, $program) {
             $cycle = $cyclesByLevel->firstWhere('level', $levelName);
 
             if (! $cycle) {
@@ -513,6 +548,22 @@ class AccreditationAreaController extends Controller
                     'cycleId' => null,
                     'cycleStatus' => null,
                     'displayStatus' => 'Not Started',
+                    'documentCount' => 0,
+                    'areas' => [],
+                ];
+            }
+
+            $activeId = (int) ($program->active_cycle_id ?? 0);
+            $isActive = $activeId
+                ? (int) $cycle->id === $activeId
+                : $levelName === ($program->accreditation_level ?: 'Level I');
+
+            if (! $isActive) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => $cycle->id,
+                    'cycleStatus' => $cycle->status,
+                    'displayStatus' => $cycle->display_status,
                     'documentCount' => 0,
                     'areas' => [],
                 ];
@@ -529,6 +580,7 @@ class AccreditationAreaController extends Controller
 
             $areaIds = $areas->pluck('id');
             $documentCounts = Document::query()
+                ->pdfOnly()
                 ->where(function ($query) use ($areaIds) {
                     $query->whereIn('area_id', $areaIds)
                         ->orWhereHas('contentRow.parameter', fn ($parameter) => $parameter->whereIn('area_id', $areaIds));
@@ -609,6 +661,7 @@ class AccreditationAreaController extends Controller
 
         $documents = Document::with('program', 'area', 'task', 'uploader', 'versions')
             ->forArea($accreditationArea->id)
+            ->pdfOnly()
             ->orderByDesc('created_at')
             ->get()
             ->map(function (Document $document) use ($request) {
@@ -621,6 +674,10 @@ class AccreditationAreaController extends Controller
 
         $evidence = CriterionEvidence::with('uploader')
             ->where('area_id', $accreditationArea->id)
+            ->where(function ($query) {
+                $query->where('mime_type', 'application/pdf')
+                    ->orWhere('original_name', 'like', '%.pdf');
+            })
             ->orderByDesc('created_at')
             ->get()
             ->map(function (CriterionEvidence $item) {
@@ -688,13 +745,28 @@ class AccreditationAreaController extends Controller
 
         $requestedProgramId = $request->filled('program_id') ? (int) $request->input('program_id') : null;
 
-        if ($requestedProgramId && ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin())) {
-            return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor()) {
+            if ($requestedProgramId) {
+                return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+            }
+
+            $programs = Program::with(['accreditationCycles', 'activeCycle'])->orderBy('name')->get();
+            if ($programs->isEmpty()) {
+                abort(422, $missingProgramMessage);
+            }
+
+            if ($programs->count() === 1) {
+                return $programs->first();
+            }
+
+            $request->attributes->set('org_visible_all_programs', $programs);
+
+            return $programs->first();
         }
 
         if ($requestedProgramId && $user->isDean()) {
             $program = Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
-            abort_unless((int) $program->college_id === (int) $user->getEffectiveCollegeId(), 403, 'You are not allowed to browse this program\'s areas.');
+            abort_unless((int) $program->college_id === (int) $user->college_id, 403, 'You are not allowed to browse this program\'s areas.');
 
             return $program;
         }
@@ -703,6 +775,19 @@ class AccreditationAreaController extends Controller
             abort_unless($user->ownsAssignedProgram($requestedProgramId), 403, 'You are not allowed to browse this program\'s areas.');
 
             return Program::with(['accreditationCycles', 'activeCycle'])->findOrFail($requestedProgramId);
+        }
+
+        if ($user->isDean()) {
+            abort_unless((bool) $user->college_id, 422, 'A dean must be assigned to a college.');
+            $collegePrograms = Program::with(['accreditationCycles', 'activeCycle'])
+                ->where('college_id', $user->college_id)
+                ->orderBy('name')
+                ->get();
+            if ($collegePrograms->isEmpty()) {
+                abort(422, $missingProgramMessage);
+            }
+
+            return $collegePrograms->first();
         }
 
         $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
@@ -741,12 +826,73 @@ class AccreditationAreaController extends Controller
         ]);
 
         $accreditationArea->update(['deadline' => $validated['deadline']]);
+        $accreditationArea->refresh();
+
+        app(AreaDeadlineReminderService::class)->sendForArea($accreditationArea, true);
 
         return response()->json([
             'success' => true,
             'message' => 'Submission deadline updated successfully.',
             'data' => new AccreditationAreaResource($accreditationArea->load('chair', 'members.user')),
         ], 200);
+    }
+
+    public function submitReview(Request $request, AccreditationArea $accreditationArea)
+    {
+        AreaEvidenceGate::assertCanManageEvidence($request->user(), $accreditationArea);
+
+        if (! $accreditationArea->cycle_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This area is not linked to an accreditation cycle.',
+            ], 422);
+        }
+
+        $review = Review::query()
+            ->where('area_id', $accreditationArea->id)
+            ->where('cycle_id', $accreditationArea->cycle_id)
+            ->whereNotIn('current_status', ['Ready', 'Rejected'])
+            ->latest('id')
+            ->first();
+
+        if (! $review) {
+            $review = Review::create([
+                'area_id' => $accreditationArea->id,
+                'cycle_id' => $accreditationArea->cycle_id,
+                'current_status' => 'Draft',
+                'submitted_by' => $request->user()->id,
+            ]);
+        }
+
+        if (! in_array($review->current_status, ['Draft', 'Revision Requested'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "This area has already been submitted (current status: {$review->current_status}).",
+                'data' => new ReviewResource($review->load('area', 'cycle', 'submitter', 'comments.user')),
+            ], 422);
+        }
+
+        $fromStatus = $review->current_status;
+        $review->update([
+            'current_status' => 'Submitted',
+            'submitted_by' => $request->user()->id,
+            'submitted_at' => now(),
+        ]);
+
+        $review->comments()->create([
+            'user_id' => $request->user()->id,
+            'role' => 'Area Chair',
+            'action' => 'submit',
+            'from_status' => $fromStatus,
+            'to_status' => 'Submitted',
+            'comment' => null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Area submitted for review.',
+            'data' => new ReviewResource($review->load('area', 'cycle', 'submitter', 'comments.user')),
+        ]);
     }
 
     /**
@@ -803,23 +949,21 @@ class AccreditationAreaController extends Controller
 
     private function seedFixedAreas(AccreditationCycle $cycle): void
     {
-        foreach (AccreditationArea::AACCUP_AREAS as $areaDef) {
-            AccreditationArea::firstOrCreate(
-                [
-                    'cycle_id' => $cycle->id,
-                    'code' => $areaDef['code'],
-                ],
-                [
-                    'name' => $areaDef['name'],
-                    'status' => 'Not Started',
-                ]
-            );
-        }
+        app(AaccupStructureService::class)->seedCycleAreas($cycle);
     }
 
     private function assertCanViewCycle($user, AccreditationCycle $cycle): void
     {
-        if (! $user || $user->isVPAA() || $user->isDean()) {
+        if (! $user || $user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor() || $user->isDean()) {
+            if ($user && $user->isDean()) {
+                $collegeId = $user->college_id;
+                abort_unless(
+                    $collegeId && (int) $cycle->program()->value('college_id') === (int) $collegeId,
+                    403,
+                    'You are not authorized to view this accreditation area.'
+                );
+            }
+
             return;
         }
 

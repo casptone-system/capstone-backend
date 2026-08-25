@@ -79,7 +79,7 @@ class AccreditationLevelStatusService
 
         return match ($view) {
             'superadmin', 'vpaa', 'qa' => $query,
-            'dean' => $query->where('college_id', $user->getEffectiveCollegeId() ?: 0),
+            'dean' => $query->where('college_id', $user->college_id ?: 0),
             'program-chair' => $this->scopeToProgramChair($query, $user),
             'area-incharge' => $this->scopeToAssignedAreas($query, $user),
             default => $this->scopeToFacultyProgram($query, $user),
@@ -88,7 +88,7 @@ class AccreditationLevelStatusService
 
     private function scopeToProgramChair(Builder $query, User $user): Builder
     {
-        $programId = $user->getEffectiveProgramId() ?: $user->assignedProgram()?->id;
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
 
         return $query->where(function (Builder $inner) use ($user, $programId) {
             $inner->where('chair_id', $user->id);
@@ -103,15 +103,11 @@ class AccreditationLevelStatusService
     {
         $programId = $user->getEffectiveProgramId();
 
-        return $query->where(function (Builder $inner) use ($user, $programId) {
-            if ($programId) {
-                $inner->where('id', $programId);
-            } else {
-                $inner->whereRaw('1 = 0');
-            }
+        if (! $programId) {
+            return $query->whereRaw('1 = 0');
+        }
 
-            $inner->orWhereHas('activeMembers', fn (Builder $members) => $members->where('user_id', $user->id));
-        });
+        return $query->where('id', $programId);
     }
 
     private function scopeToAssignedAreas(Builder $query, User $user): Builder
@@ -138,8 +134,10 @@ class AccreditationLevelStatusService
                 'level' => $level,
                 'cycleId' => $cycle?->id,
                 'cycleStatus' => $cycle?->status,
+                'preparationStatus' => $cycle?->preparation_status,
                 'displayStatus' => $cycle?->display_status ?? 'Not Started',
                 'validUntil' => $cycle?->valid_until?->toDateString(),
+                'validityStatus' => $cycle?->validity_status ?? 'Not set',
                 'scheduledVisit' => $cycle?->scheduled_visit?->toDateString(),
             ];
         })->all();

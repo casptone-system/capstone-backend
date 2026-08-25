@@ -10,6 +10,7 @@ use App\Models\Review;
 use App\Models\Task;
 use App\Models\Team;
 use App\Models\User;
+use App\Services\AreaProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -17,33 +18,16 @@ class DeanController extends Controller
 {
     protected function resolveDeanCollege(User $user, ?int $requestedCollegeId = null): ?College
     {
-        if ($requestedCollegeId) {
-            $college = College::find($requestedCollegeId);
-            if (! $college) {
-                return null;
-            }
-
-            $effectiveCollegeId = $user->getEffectiveCollegeId();
-            if ($effectiveCollegeId && (int) $effectiveCollegeId !== (int) $college->id) {
-                return null;
-            }
-
-            return $college;
+        $collegeId = $user->college_id;
+        if (! $collegeId) {
+            return null;
         }
 
-        if ($user->college_id) {
-            return College::find($user->college_id);
+        if ($requestedCollegeId && (int) $requestedCollegeId !== (int) $collegeId) {
+            return null;
         }
 
-        if ($user->program_id) {
-            return $user->program?->college;
-        }
-
-        if ($user->team_id) {
-            return $user->team?->program?->college;
-        }
-
-        return $user->getEffectiveCollegeId() ? College::find($user->getEffectiveCollegeId()) : null;
+        return College::find($collegeId);
     }
 
     protected function buildProgramRequirementAnalytics(Program $program): array
@@ -89,7 +73,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
@@ -113,13 +97,13 @@ class DeanController extends Controller
         }
 
         $programs = Program::where('college_id', $college->id)
-            ->with(['college', 'chairUser', 'accreditationCycles'])
+            ->with(['college', 'chairUser', 'accreditationCycles', 'activeCycle'])
             ->get();
 
         $programIds = $programs->pluck('id');
 
         $facultyByProgram = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Faculty'))
+            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
             ->select(['id', 'first_name', 'middle_name', 'last_name', 'email', 'program_id'])
             ->get()
             ->groupBy('program_id');
@@ -136,11 +120,11 @@ class DeanController extends Controller
             ->count('chair_id');
 
         $facultyCount = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Faculty'))
+            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
             ->count();
 
         $activeFacultyCount = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', 'Faculty'))
+            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
             ->whereNotNull('email_verified_at')
             ->count();
 
@@ -182,14 +166,15 @@ class DeanController extends Controller
                 $analytics = $this->buildProgramRequirementAnalytics($program);
                 
                 // Get the latest accreditation cycle and extract its level
-                $latestCycle = $program->accreditationCycles?->sortByDesc('created_at')->first();
-                $accreditationLevel = $latestCycle?->level ?? 'Not Set';
+                $currentCycle = \App\Support\ActiveCycle::forProgram($program);
+                $accreditationLevel = $currentCycle?->level ?? 'Not Set';
 
                 return [
                     'id' => $program->id,
                     'name' => $program->name,
                     'code' => $program->code,
-                    'chair' => $program->chairUser?->name ?? $program->chair,
+                    'chair' => $program->chairUser?->name,
+                    'needsChairAssigned' => $program->needs_chair_assigned,
                     'faculty' => $faculty,
                     'facultyCount' => count($faculty),
                     'accreditationStatus' => $program->accreditation_status,
@@ -203,6 +188,7 @@ class DeanController extends Controller
                         'overdueTasks' => $analytics['overdueTasks'],
                         'completionRate' => $analytics['completionRate'],
                     ],
+                    'areaProgress' => app(AreaProgressService::class)->breakdownForProgram($program),
                     'requirements' => $analytics['requirements'],
                 ];
             })->values(),
@@ -223,7 +209,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
@@ -236,7 +222,7 @@ class DeanController extends Controller
             return response()->json(['success' => true, 'data' => []]);
         }
 
-        $query = Program::where('college_id', $college->id)->with(['college']);
+        $query = Program::where('college_id', $college->id)->with(['college', 'activeCycle', 'accreditationCycles']);
         if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
                 $q->where('name', 'like', "%{$request->search}%")
@@ -254,7 +240,8 @@ class DeanController extends Controller
                 'college_id' => $program->college_id,
                 'name' => $program->name,
                 'code' => $program->code,
-                'chair' => $program->chairUser?->name ?? $program->chair,
+                'chair' => $program->chairUser?->name,
+                'needsChairAssigned' => $program->needs_chair_assigned,
                 'chair_id' => $program->chair_id,
                 'accreditation_status' => $program->accreditation_status,
                 'compliance_score' => (int) $program->compliance_score,
@@ -265,6 +252,7 @@ class DeanController extends Controller
                     'overdueTasks' => $analytics['overdueTasks'],
                     'completionRate' => $analytics['completionRate'],
                 ],
+                'areaProgress' => app(AreaProgressService::class)->breakdownForProgram($program),
                 'requirements' => $analytics['requirements'],
                 'created_at' => $program->created_at,
                 'updated_at' => $program->updated_at,
@@ -282,7 +270,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
@@ -335,7 +323,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
@@ -389,7 +377,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
@@ -404,7 +392,7 @@ class DeanController extends Controller
         $programChair = User::findOrFail($validated['program_chair_id']);
 
         // Verify program chair has permission
-        if (! $programChair->hasRole('Program Chair')) {
+        if (! $programChair->isProgramChair()) {
             return response()->json(['success' => false, 'message' => 'User is not a Program Chair.'], 422);
         }
 
@@ -481,7 +469,7 @@ class DeanController extends Controller
     {
         $user = $request->user();
 
-        if (! $user || ! $user->hasRole('Dean')) {
+        if (! $user || ! $user->isDean()) {
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 

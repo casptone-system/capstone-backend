@@ -8,19 +8,21 @@ use App\Models\AccreditationCycle;
 use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
+use App\Support\ActiveCycle;
 use Illuminate\Http\Request;
 
 class QAController extends Controller
 {
     /**
-     * Get QA dashboard with monitoring metrics
+     * Institution-wide QA monitoring. These endpoints are deliberately unscoped
+     * across every college and program.
      */
     public function dashboard(Request $request)
     {
         $user = $request->user();
 
         // Verify user is QA
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can access the QA dashboard.');
         }
 
@@ -41,7 +43,7 @@ class QAController extends Controller
         $evidenceCompletion = $totalAreas > 0 ? round(($areasWithEvidence / $totalAreas) * 100) : 0;
 
         // --- Pending Reviews ---
-        $pendingReviews = Review::where('status', 'pending')->count();
+        $pendingReviews = Review::whereNotIn('current_status', ['Ready', 'Rejected'])->count();
 
         // --- Programs List with Status ---
         $programs = AccreditationCycle::with('program.college')
@@ -100,7 +102,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can access reports.');
         }
 
@@ -146,7 +148,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can access reports.');
         }
 
@@ -195,7 +197,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can access reports.');
         }
 
@@ -247,17 +249,28 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can access accreditation data.');
         }
 
-        $cycles = AccreditationCycle::with(['program.college', 'program.chairUser'])
-            ->orderBy('updated_at', 'desc')
-            ->paginate($request->get('per_page', 15));
+        $cycles = ActiveCycle::uniquePerProgram(
+            AccreditationCycle::with(['program.college', 'program.chairUser'])
+                ->orderByDesc('updated_at')
+                ->get()
+        );
+
+        $page = max(1, (int) $request->get('page', 1));
+        $perPage = max(1, (int) $request->get('per_page', 15));
+        $paged = $cycles->forPage($page, $perPage)->values();
 
         return response()->json([
             'success' => true,
-            'data' => $cycles,
+            'data' => [
+                'data' => $paged,
+                'total' => $cycles->count(),
+                'per_page' => $perPage,
+                'current_page' => $page,
+            ],
         ], 200);
     }
 
@@ -268,7 +281,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->hasRole('qa')) {
+        if (!$user || !$user->isQA()) {
             abort(403, 'Only QA staff can view accreditation details.');
         }
 

@@ -5,6 +5,7 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Notifications\ResetPasswordNotification;
 use App\Notifications\VerifyApiEmailNotification;
+use App\Support\RoleSlug;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -136,7 +137,7 @@ class User extends Authenticatable
 
     public function hasAnyCanonicalRole(array $roles): bool
     {
-        $normalizedRoles = array_map([$this, 'normalizeRoleName'], $roles);
+        $normalizedRoles = array_values(array_filter(array_map([$this, 'normalizeRoleName'], $roles)));
 
         return $this->getRoleNames()
             ->map(fn (string $name) => $this->normalizeRoleName($name))
@@ -146,104 +147,103 @@ class User extends Authenticatable
 
     public function isSuperAdmin(): bool
     {
-        return $this->hasCanonicalRole('superadmin');
+        return $this->hasCanonicalRole(RoleSlug::SUPERADMIN);
     }
 
     public function isQA(): bool
     {
-        return $this->hasCanonicalRole('qa');
+        return $this->hasCanonicalRole(RoleSlug::QA);
     }
 
     public function isVPAA(): bool
     {
-        return $this->hasCanonicalRole('vpaa/di') || $this->hasCanonicalRole('vpaa');
+        return $this->hasCanonicalRole(RoleSlug::VPAA);
     }
 
     public function isDean(): bool
     {
-        return $this->hasCanonicalRole('dean');
+        return $this->hasCanonicalRole(RoleSlug::DEAN);
     }
 
     public function isProgramChair(): bool
     {
-        return $this->hasCanonicalRole('program-chair');
+        return $this->hasCanonicalRole(RoleSlug::PROGRAM_CHAIR);
     }
 
     public function isAreaIncharge(): bool
     {
-        return $this->hasCanonicalRole('area-incharge');
+        return $this->hasCanonicalRole(RoleSlug::AREA_IN_CHARGE);
     }
 
     public function isFaculty(): bool
     {
-        return $this->hasCanonicalRole('faculty');
+        return $this->hasCanonicalRole(RoleSlug::FACULTY);
     }
 
+    public function isAccreditor(): bool
+    {
+        return $this->hasCanonicalRole(RoleSlug::ACCREDITOR);
+    }
+
+    /**
+     * Membership source of truth: users.program_id only.
+     */
     public function getEffectiveProgramId(): ?int
     {
-        if ($this->program_id) {
-            return (int) $this->program_id;
-        }
+        return $this->program_id ? (int) $this->program_id : null;
+    }
 
-        if ($this->team?->program_id) {
-            return (int) $this->team->program_id;
-        }
+    public function chairedProgram(): ?Program
+    {
+        return Program::where('chair_id', $this->id)->first();
+    }
 
-        $chairedProgramId = Program::where('chair_id', $this->id)->value('id');
-        if ($chairedProgramId) {
-            return (int) $chairedProgramId;
-        }
+    public function chairedProgramId(): ?int
+    {
+        $id = Program::where('chair_id', $this->id)->value('id');
 
-        $membershipProgramId = $this->programMemberships()->orderByDesc('id')->value('program_id');
-
-        return $membershipProgramId ? (int) $membershipProgramId : null;
+        return $id ? (int) $id : null;
     }
 
     public function assignedProgram(): ?Program
     {
-        if ($this->getEffectiveProgramId()) {
-            return Program::find($this->getEffectiveProgramId());
+        if ($this->isProgramChair()) {
+            return $this->chairedProgram() ?: $this->program;
         }
 
-        return Program::where('chair_id', $this->id)->first();
+        return $this->program_id ? $this->program : null;
     }
 
     public function assignedProgramId(): ?int
     {
-        return $this->assignedProgram()?->id;
+        if ($this->isProgramChair()) {
+            return $this->chairedProgramId() ?: $this->getEffectiveProgramId();
+        }
+
+        return $this->getEffectiveProgramId();
     }
 
     public function ownsAssignedProgram(int $programId): bool
     {
-        return (int) $this->assignedProgramId() === (int) $programId
-            || Program::where('id', $programId)->where('chair_id', $this->id)->exists();
+        return $this->chairedProgramId() === (int) $programId;
     }
 
     public function belongsToProgram(int $programId): bool
     {
-        if ((int) $this->program_id === (int) $programId) {
-            return true;
-        }
-
-        if ((int) $this->team?->program_id === (int) $programId) {
-            return true;
-        }
-
-        return $this->programMemberships()->where('program_id', $programId)->exists();
+        return $this->program_id !== null && (int) $this->program_id === (int) $programId;
     }
 
+    /**
+     * College for Deans is users.college_id only — never inferred from program/team.
+     * Other roles may still expose college_id when it is actually stored.
+     */
     public function getEffectiveCollegeId(): ?int
     {
-        if ($this->college_id) {
-            return $this->college_id;
+        if ($this->isDean()) {
+            return $this->college_id ? (int) $this->college_id : null;
         }
 
-        $programId = $this->getEffectiveProgramId();
-        if (! $programId) {
-            return null;
-        }
-
-        return Program::find($programId)?->college_id;
+        return $this->college_id ? (int) $this->college_id : null;
     }
 
     public function isAssignedToArea(AccreditationArea $area): bool
@@ -286,27 +286,7 @@ class User extends Authenticatable
 
     protected function normalizeRoleName(string $role): string
     {
-        $base = trim(strtolower($role));
-        $base = str_replace(['_', ' '], '-', $base);
-        $base = preg_replace('/-+/', '-', $base) ?: $base;
-
-        if (str_contains($base, 'vpaa') && str_contains($base, 'di')) {
-            return 'vpaa/di';
-        }
-
-        if (str_starts_with($base, 'super') || str_contains($base, 'super-administrator') || str_contains($base, 'superadministrator')) {
-            return 'superadmin';
-        }
-
-        if (str_contains($base, 'area') && (str_contains($base, 'in-charge') || str_contains($base, 'incharge'))) {
-            return 'area-incharge';
-        }
-
-        if ($base === 'programchair') {
-            return 'program-chair';
-        }
-
-        return $base;
+        return RoleSlug::canonicalize($role) ?? '';
     }
 
     public function getProfilePhotoUrlAttribute(): ?string
