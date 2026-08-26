@@ -289,6 +289,7 @@ class AuthController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
+                'approve reviews',
                 'request revisions',
             ],
             'program-chair' => [
@@ -298,6 +299,7 @@ class AuthController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
+                'approve reviews',
                 'request revisions',
             ],
             'area in-charge' => [

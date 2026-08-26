@@ -7,6 +7,7 @@ use App\Models\AccreditationCycle;
 use App\Models\AccreditationParameter;
 use App\Models\AreaMember;
 use App\Models\College;
+use App\Models\Document;
 use App\Models\ParameterContentRow;
 use App\Models\Program;
 use App\Models\User;
@@ -27,6 +28,7 @@ class AreaDeadlineAndDeanProgressTest extends TestCase
 
         Role::firstOrCreate(['name' => 'Dean', 'guard_name' => 'web']);
         Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'program-chair', 'guard_name' => 'web']);
         Permission::firstOrCreate(['name' => 'access-college-dashboard', 'guard_name' => 'web']);
 
         $college = College::factory()->create();
@@ -36,6 +38,9 @@ class AreaDeadlineAndDeanProgressTest extends TestCase
         $dean->givePermissionTo('access-college-dashboard');
 
         $program = Program::factory()->create(['college_id' => $college->id, 'name' => 'Computer Science']);
+        $programChair = User::factory()->create(['program_id' => $program->id]);
+        $programChair->assignRole('program-chair');
+        $program->update(['chair_id' => $programChair->id]);
         $otherProgram = Program::factory()->create(['college_id' => $otherCollege->id, 'name' => 'History']);
         $cycle = AccreditationCycle::factory()->create(['program_id' => $program->id]);
         $program->update(['active_cycle_id' => $cycle->id]);
@@ -71,6 +76,14 @@ class AreaDeadlineAndDeanProgressTest extends TestCase
             'file' => UploadedFile::fake()->create('evidence.pdf', 40, 'application/pdf'),
         ])->assertStatus(201);
 
+        $this->patchJson("/api/parameter-rows/{$row->id}/status", [
+            'is_done' => true,
+        ])->assertStatus(200);
+
+        $documentId = Document::query()->where('content_row_id', $row->id)->value('id');
+        Sanctum::actingAs($programChair);
+        $this->postJson("/api/documents/{$documentId}/approve")->assertStatus(200);
+
         Sanctum::actingAs($dean);
         $response = $this->getJson('/api/dean/dashboard')->assertStatus(200);
 
@@ -89,9 +102,13 @@ class AreaDeadlineAndDeanProgressTest extends TestCase
 
         Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
         Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'program-chair', 'guard_name' => 'web']);
 
         $college = College::factory()->create();
         $program = Program::factory()->create(['college_id' => $college->id]);
+        $programChair = User::factory()->create(['program_id' => $program->id]);
+        $programChair->assignRole('program-chair');
+        $program->update(['chair_id' => $programChair->id]);
         $cycle = AccreditationCycle::factory()->create(['program_id' => $program->id]);
 
         $chair = User::factory()->create(['program_id' => $program->id]);
@@ -135,6 +152,14 @@ class AreaDeadlineAndDeanProgressTest extends TestCase
             'title' => 'Done',
             'file' => UploadedFile::fake()->create('done.pdf', 20, 'application/pdf'),
         ])->assertStatus(201);
+
+        $this->patchJson("/api/parameter-rows/{$row->id}/status", [
+            'is_done' => true,
+        ])->assertStatus(200);
+
+        $documentId = Document::query()->where('content_row_id', $row->id)->value('id');
+        Sanctum::actingAs($programChair);
+        $this->postJson("/api/documents/{$documentId}/approve")->assertStatus(200);
 
         $this->artisan('notifications:check-area-deadlines')->assertSuccessful();
 

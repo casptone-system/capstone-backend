@@ -190,4 +190,34 @@ class AccreditationCycle extends Model
             default => 'Not Started',
         };
     }
+
+    public static function rank(?string $level): int
+    {
+        $index = array_search((string) $level, self::LEVELS, true);
+
+        return $index === false ? 0 : (int) $index;
+    }
+
+    public static function currentLevelFor(Program $program): string
+    {
+        $program->loadMissing('activeCycle');
+
+        foreach ([$program->activeCycle?->level, $program->accreditation_level] as $level) {
+            if (in_array($level, self::LEVELS, true)) {
+                return $level;
+            }
+        }
+
+        return 'Level I';
+    }
+
+    public static function isReachedFor(Program $program, string $levelName): bool
+    {
+        return self::rank($levelName) < self::rank(self::currentLevelFor($program));
+    }
+
+    public static function isOpenFor(Program $program, string $levelName): bool
+    {
+        return ! self::isReachedFor($program, $levelName);
+    }
 }

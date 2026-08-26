@@ -56,8 +56,7 @@ class ReviewPolicy
         }
 
         return match ($review->current_status) {
-            'Submitted' => $user->isAreaIncharge() && $user->isAssignedToArea($review->area),
-            'Area Approved' => $user->isDean() && $this->belongsToCollege($user, $review),
+            'Submitted', 'Area Approved' => $user->isProgramChair() && $this->belongsToProgram($user, $review),
             default => false,
         };
     }

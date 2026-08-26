@@ -39,6 +39,7 @@ class MyAreaResource extends JsonResource
             'reviewStatus' => $reviewStatus,
             'progressPercent' => (int) ($this->progress_percent ?? 0),
             'chair' => $this->whenLoaded('chair', fn () => $this->chair ? new UserResource($this->chair) : null),
+            'members' => $this->whenLoaded('members', fn () => AreaMemberResource::collection($this->members)),
             'cycle' => $this->whenLoaded('cycle', fn () => new AccreditationCycleResource($this->cycle)),
         ];
     }

@@ -234,6 +234,7 @@ class UserController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
+                'approve reviews',
                 'request revisions',
             ],
             'program-chair' => [
@@ -243,6 +244,7 @@ class UserController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
+                'approve reviews',
                 'request revisions',
             ],
             'area in-charge' => [

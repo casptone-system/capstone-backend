@@ -22,6 +22,7 @@ class AreaRowEvidenceTest extends TestCase
     private User $chair;
     private User $member;
     private User $qa;
+    private User $programChair;
     private Program $program;
     private AccreditationArea $area;
     private AccreditationParameter $parameter;
@@ -33,12 +34,17 @@ class AreaRowEvidenceTest extends TestCase
 
         Role::firstOrCreate(['name' => 'Faculty', 'guard_name' => 'web']);
         Role::firstOrCreate(['name' => 'Area In-Charge', 'guard_name' => 'web']);
+        Role::firstOrCreate(['name' => 'program-chair', 'guard_name' => 'web']);
         Role::firstOrCreate(['name' => 'QA', 'guard_name' => 'web']);
         Role::firstOrCreate(['name' => 'VPAA', 'guard_name' => 'web']);
 
         $college = College::factory()->create();
         $this->program = Program::factory()->create(['college_id' => $college->id]);
         $cycle = AccreditationCycle::factory()->create(['program_id' => $this->program->id]);
+
+        $this->programChair = User::factory()->create(['program_id' => $this->program->id]);
+        $this->programChair->assignRole('program-chair');
+        $this->program->update(['chair_id' => $this->programChair->id]);
 
         $this->chair = User::factory()->create(['program_id' => $this->program->id]);
         $this->chair->assignRole('Area In-Charge');
@@ -89,6 +95,14 @@ class AreaRowEvidenceTest extends TestCase
             ->assertJsonPath('data.contentRowId', $this->row->id)
             ->assertJsonPath('data.areaId', $this->area->id);
 
+        $this->area->refresh();
+        $this->assertSame(0, $this->area->progress_percent);
+
+        $this->markRowDone($this->row->id);
+        $this->area->refresh();
+        $this->assertSame(0, $this->area->progress_percent);
+
+        $this->approveLatestRowDocument();
         $this->area->refresh();
         $this->assertSame(100, $this->area->progress_percent);
     }
@@ -151,7 +165,7 @@ class AreaRowEvidenceTest extends TestCase
         ])->assertStatus(422);
     }
 
-    public function test_progress_is_based_on_uploaded_rows_only(): void
+    public function test_progress_requires_done_uploaded_and_approved(): void
     {
         Storage::fake('local');
         Sanctum::actingAs($this->chair);
@@ -176,7 +190,34 @@ class AreaRowEvidenceTest extends TestCase
         ])->assertStatus(201);
 
         $this->area->refresh();
+        $this->assertSame(0, $this->area->progress_percent);
+
+        $stats = $this->getJson('/api/users/me/areas')->assertStatus(200)->json('meta.taskStats');
+        $this->assertSame(1, $stats['total']);
+        $this->assertSame(0, $stats['completed']);
+        $this->assertSame(1, $stats['inProgress']);
+
+        $this->markRowDone($this->row->id);
+        $this->area->refresh();
+        $this->assertSame(0, $this->area->progress_percent);
+
+        $stats = $this->getJson('/api/users/me/areas')->assertStatus(200)->json('meta.taskStats');
+        $this->assertSame(0, $stats['completed']);
+        $this->assertSame(0, $stats['inProgress']);
+        $this->assertSame(1, $stats['pending']);
+        $this->assertSame(1, $stats['pendingReviews']);
+        $this->assertSame(0, $stats['progressPercent']);
+
+        $this->approveLatestRowDocument();
+        $this->area->refresh();
         $this->assertSame(100, $this->area->progress_percent);
+
+        $stats = $this->getJson('/api/users/me/areas')->assertStatus(200)->json('meta.taskStats');
+        $this->assertSame(1, $stats['completed']);
+        $this->assertSame(0, $stats['inProgress']);
+        $this->assertSame(0, $stats['pending']);
+        $this->assertSame(0, $stats['pendingReviews']);
+        $this->assertSame(100, $stats['progressPercent']);
     }
 
     public function test_remove_deletes_all_row_files_and_lowers_progress(): void
@@ -224,8 +265,44 @@ class AreaRowEvidenceTest extends TestCase
         $this->assertNull(Document::find($first));
         $this->assertNotNull(Document::find($second));
         $this->assertSame(1, Document::where('content_row_id', $this->row->id)->count());
+        $this->markRowDone($this->row->id);
+        $this->approveLatestRowDocument();
         $this->area->refresh();
         $this->assertSame(100, $this->area->progress_percent);
+    }
+
+    public function test_chair_submits_one_row_without_submitting_the_area(): void
+    {
+        Storage::fake('local');
+        Sanctum::actingAs($this->chair);
+
+        $this->postJson("/api/parameter-rows/{$this->row->id}/submit")
+            ->assertStatus(422);
+
+        $this->postJson('/api/documents', [
+            'program_id' => $this->program->id,
+            'content_row_id' => $this->row->id,
+            'title' => 'Row evidence',
+            'file' => UploadedFile::fake()->create('evidence.pdf', 40, 'application/pdf'),
+        ])->assertStatus(201);
+
+        $this->postJson("/api/parameter-rows/{$this->row->id}/submit")
+            ->assertStatus(200)
+            ->assertJsonPath('data.isDone', true)
+            ->assertJsonPath('data.hasFile', true);
+
+        $this->area->refresh();
+        $this->assertSame(0, $this->area->progress_percent);
+        $this->approveLatestRowDocument();
+        $this->area->refresh();
+        $this->assertSame(100, $this->area->progress_percent);
+        $this->assertDatabaseMissing('reviews', [
+            'area_id' => $this->area->id,
+            'current_status' => 'Submitted',
+        ]);
+
+        Sanctum::actingAs($this->member);
+        $this->postJson("/api/parameter-rows/{$this->row->id}/submit")->assertStatus(403);
     }
 
     public function test_chair_submit_moves_area_review_from_draft_to_submitted(): void
@@ -259,6 +336,51 @@ class AreaRowEvidenceTest extends TestCase
         $vpaa->assignRole('VPAA');
         Sanctum::actingAs($vpaa);
         $this->deleteJson("/api/parameter-rows/{$this->row->id}")->assertStatus(200);
+    }
+
+    public function test_my_areas_meta_uses_pending_approval_and_real_area_membership(): void
+    {
+        Storage::fake('local');
+        Sanctum::actingAs($this->chair);
+
+        $this->postJson('/api/documents', [
+            'program_id' => $this->program->id,
+            'content_row_id' => $this->row->id,
+            'title' => 'Row evidence',
+            'file' => UploadedFile::fake()->create('evidence.pdf', 40, 'application/pdf'),
+        ])->assertStatus(201);
+        $this->markRowDone($this->row->id);
+
+        $response = $this->getJson('/api/users/me/areas')->assertStatus(200);
+        $stats = $response->json('meta.taskStats');
+        $team = collect($response->json('meta.teamMembers'));
+
+        $this->assertSame(1, $stats['pendingReviews']);
+        $this->assertSame(1, $stats['pending']);
+        $this->assertTrue($team->contains(fn ($member) => (int) $member['id'] === (int) $this->chair->id && $member['role'] === 'Area Chair'));
+        $this->assertTrue($team->contains(fn ($member) => (int) $member['id'] === (int) $this->member->id && $member['role'] === 'Area Member'));
+        $this->assertTrue($team->contains(fn ($member) => (int) $member['id'] === (int) $this->programChair->id && $member['role'] === 'Program Chair'));
+
+        Sanctum::actingAs($this->member);
+        $memberStats = $this->getJson('/api/users/me/areas')->assertStatus(200)->json('meta.taskStats');
+        $this->assertSame(1, $memberStats['pendingReviews']);
+    }
+
+    private function markRowDone(int $rowId): void
+    {
+        $this->patchJson("/api/parameter-rows/{$rowId}/status", [
+            'is_done' => true,
+        ])->assertStatus(200);
+    }
+
+    private function approveLatestRowDocument(): void
+    {
+        $document = Document::query()->where('content_row_id', $this->row->id)->latest('id')->first();
+        $this->assertNotNull($document);
+
+        Sanctum::actingAs($this->programChair);
+        $this->postJson("/api/documents/{$document->id}/approve")->assertStatus(200);
+        Sanctum::actingAs($this->chair);
     }
 
     private function memberCanUpload(): bool

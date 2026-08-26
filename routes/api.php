@@ -85,6 +85,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
     Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
     Route::delete('parameter-rows/{parameterContentRow}/documents', [FacultyAreaContentController::class, 'destroyRowDocuments']);
+    Route::post('parameter-rows/{parameterContentRow}/submit', [FacultyAreaContentController::class, 'submitRow']);
     Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
@@ -113,6 +114,8 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::apiResource('tasks', TaskController::class);
 
     // Documents (CRUD + upload + replace + versions + download)
+    Route::post('documents/{document}/approve', [DocumentController::class, 'approve']);
+    Route::post('documents/{document}/request-revision', [DocumentController::class, 'requestRevision']);
     Route::post('documents/{document}/replace', [DocumentController::class, 'replace']);
     Route::get('documents/{document}/versions', [DocumentController::class, 'versions']);
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);

@@ -103,8 +103,7 @@ class Review extends Model
     public function getExpectedReviewerRole(): ?string
     {
         return match ($this->current_status) {
-            'Submitted' => 'Area Chair',
-            'Area Approved' => 'Dean',
+            'Submitted', 'Area Approved' => 'Program Chair',
             default => null,
         };
     }

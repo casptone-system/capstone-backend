@@ -79,6 +79,7 @@ class RolePermissionSeeder extends Seeder
                 'assign chairs',
                 'review reports',
                 'manage reviews',
+                'approve reviews',
                 'request revisions',
             ],
             RoleSlug::AREA_IN_CHARGE => [

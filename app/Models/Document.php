@@ -46,6 +46,7 @@ class Document extends Model
         'Active',
         'Draft',
         'Revision Requested',
+        'Approved',
         'Archived',
     ];
 

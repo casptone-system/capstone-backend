@@ -24,7 +24,7 @@ class ReviewController extends Controller
             'submit' => 'Submitted',
         ],
         'Submitted' => [
-            'approve' => 'Area Approved',
+            'approve' => 'Ready',
             'revision_request' => 'Revision Requested',
             'reject' => 'Rejected',
         ],
@@ -277,7 +277,7 @@ class ReviewController extends Controller
 
         if ($action === 'approve') {
             return match ($currentStatus) {
-                'Submitted' => 'Area Approved',
+                'Submitted' => 'Ready',
                 'Area Approved' => 'Ready',
                 default => $currentStatus,
             };
@@ -305,15 +305,13 @@ class ReviewController extends Controller
 
         if ($action === 'revision_request' || $action === 'reject') {
             return match ($currentStatus) {
-                'Submitted' => 'Area Chair',
-                'Area Approved' => 'Dean',
+                'Submitted', 'Area Approved' => 'Program Chair',
                 default => 'Member',
             };
         }
 
         return match ($currentStatus) {
-            'Submitted' => 'Area Chair',
-            'Area Approved' => 'Dean',
+            'Submitted', 'Area Approved' => 'Program Chair',
             default => 'Member',
         };
     }

@@ -89,6 +89,20 @@ class DocumentPolicy
         return false;
     }
 
+    public function approve(User $user, Document $document): bool
+    {
+        if ($user->isSuperAdmin()) {
+            return true;
+        }
+
+        return $user->isProgramChair() && $this->belongsToAssignedProgram($user, $document);
+    }
+
+    public function requestRevision(User $user, Document $document): bool
+    {
+        return $this->approve($user, $document);
+    }
+
     public function delete(User $user, Document $document): bool
     {
         return $this->update($user, $document);
@@ -97,6 +111,25 @@ class DocumentPolicy
     public function download(User $user, Document $document): bool
     {
         return $this->view($user, $document);
+    }
+
+    protected function belongsToAssignedProgram(User $user, Document $document): bool
+    {
+        $programId = $user->assignedProgramId() ?: $user->getEffectiveProgramId();
+
+        if (! $programId) {
+            return false;
+        }
+
+        if ($document->program_id !== null && (int) $document->program_id === (int) $programId) {
+            return true;
+        }
+
+        $document->loadMissing(['area.cycle', 'contentRow.parameter.area.cycle']);
+        $area = $document->area ?: $document->contentRow?->parameter?->area;
+        $areaProgramId = $area?->cycle?->program_id;
+
+        return $areaProgramId !== null && (int) $areaProgramId === (int) $programId;
     }
 
     public function replace(User $user, Document $document): bool

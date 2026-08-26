@@ -110,7 +110,7 @@ class AccreditationAreaController extends Controller
      */
     public function update(Request $request, AccreditationArea $accreditationArea)
     {
-        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
@@ -150,7 +150,7 @@ class AccreditationAreaController extends Controller
      */
     public function assignChair(Request $request, AccreditationArea $accreditationArea)
     {
-        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'chair_id' => ['required', 'exists:users,id'],
             'confirm_reassign' => ['sometimes', 'boolean'],
@@ -223,7 +223,7 @@ class AccreditationAreaController extends Controller
      */
     public function addMember(Request $request, AccreditationArea $accreditationArea)
     {
-        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
 
         $userId = $request->input('user_id', $request->input('faculty_id'));
         $validated = $request->validate([
@@ -445,22 +445,35 @@ class AccreditationAreaController extends Controller
 
     /**
      * List Level I–IV folders for the authenticated Program Chair, with the
-     * 10 fixed AACCUP areas under each existing accreditation cycle.
+     * 10 fixed AACCUP areas under each open accreditation cycle.
      *
-     * Seeding is idempotent per cycle. Levels without a cycle are returned
-     * empty so all four levels stay browsable.
+     * The program's current level and every higher level are opened (and
+     * seeded) automatically. Lower levels stay visible as already reached.
      */
     public function programChairAreas(Request $request)
     {
         $user = $request->user() ?? $request->user('api');
         $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before managing area assignments.');
-        $cyclesByLevel = $program->accreditationCycles
-            ->sortByDesc('created_at')
-            ->unique('level')
-            ->values();
+        $prepared = $this->prepareProgramLevels($program);
 
-        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $program) {
-            $cycle = $cyclesByLevel->firstWhere('level', $levelName);
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($prepared) {
+            $cycle = $prepared['cyclesByLevel']->firstWhere('level', $levelName);
+
+            if (AccreditationCycle::isReachedFor($prepared['program'], $levelName)) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => $cycle?->id,
+                    'cycleStatus' => $cycle?->status,
+                    'displayStatus' => 'Reached',
+                    'access' => 'reached',
+                    'isOpen' => false,
+                    'assignedCount' => $cycle
+                        ? $cycle->areas()->whereNotNull('chair_id')->count()
+                        : 0,
+                    'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
+                    'areas' => [],
+                ];
+            }
 
             if (! $cycle) {
                 return [
@@ -468,23 +481,8 @@ class AccreditationAreaController extends Controller
                     'cycleId' => null,
                     'cycleStatus' => null,
                     'displayStatus' => 'Not Started',
-                    'assignedCount' => 0,
-                    'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
-                    'areas' => [],
-                ];
-            }
-
-            $activeId = (int) ($program->active_cycle_id ?? 0);
-            $isActive = $activeId
-                ? (int) $cycle->id === $activeId
-                : $levelName === ($program->accreditation_level ?: 'Level I');
-
-            if (! $isActive) {
-                return [
-                    'level' => $levelName,
-                    'cycleId' => $cycle->id,
-                    'cycleStatus' => $cycle->status,
-                    'displayStatus' => $cycle->display_status,
+                    'access' => 'open',
+                    'isOpen' => false,
                     'assignedCount' => 0,
                     'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
                     'areas' => [],
@@ -502,7 +500,11 @@ class AccreditationAreaController extends Controller
                 'level' => $levelName,
                 'cycleId' => $cycle->id,
                 'cycleStatus' => $cycle->status,
-                'displayStatus' => $cycle->display_status,
+                'displayStatus' => $cycle->id === $prepared['program']->active_cycle_id
+                    ? ($cycle->display_status === 'Not Started' ? 'In Progress' : $cycle->display_status)
+                    : $cycle->display_status,
+                'access' => 'open',
+                'isOpen' => true,
                 'assignedCount' => $areas->whereNotNull('chair_id')->count(),
                 'totalAreas' => count(AccreditationArea::AACCUP_AREAS),
                 'areas' => AccreditationAreaResource::collection($areas)->resolve(),
@@ -513,10 +515,10 @@ class AccreditationAreaController extends Controller
             'success' => true,
             'message' => 'Accreditation areas retrieved successfully.',
             'data' => [
-                'programId' => $program->id,
-                'programName' => $program->name,
-                'activeCycleId' => $program->active_cycle_id,
-                'activeLevel' => $program->activeCycle?->level,
+                'programId' => $prepared['program']->id,
+                'programName' => $prepared['program']->name,
+                'activeCycleId' => $prepared['program']->active_cycle_id,
+                'activeLevel' => $prepared['currentLevel'],
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
                 'levels' => $levels->values(),
             ],
@@ -526,21 +528,31 @@ class AccreditationAreaController extends Controller
     /**
      * Level-first Area Documents tree for the authenticated Program Chair.
      *
-     * Returns Level I–IV folders, the 10 AACCUP areas under each existing
-     * cycle, the assigned Area In-Charge, area/review status, and document
-     * counts. File lists are loaded per area via GET /program-chair/areas/{area}/documents.
+     * Returns Level I–IV folders. The program's current level and every
+     * higher level are opened automatically; lower levels are marked reached.
+     * File lists are loaded per area via GET /program-chair/areas/{area}/documents.
      */
     public function programChairAreaDocuments(Request $request)
     {
         $user = $request->user() ?? $request->user('api');
         $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before browsing area documents.');
-        $cyclesByLevel = $program->accreditationCycles
-            ->sortByDesc('created_at')
-            ->unique('level')
-            ->values();
+        $prepared = $this->prepareProgramLevels($program);
 
-        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($cyclesByLevel, $user, $program) {
-            $cycle = $cyclesByLevel->firstWhere('level', $levelName);
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $levelName) use ($prepared, $user) {
+            $cycle = $prepared['cyclesByLevel']->firstWhere('level', $levelName);
+
+            if (AccreditationCycle::isReachedFor($prepared['program'], $levelName)) {
+                return [
+                    'level' => $levelName,
+                    'cycleId' => $cycle?->id,
+                    'cycleStatus' => $cycle?->status,
+                    'displayStatus' => 'Reached',
+                    'access' => 'reached',
+                    'isOpen' => false,
+                    'documentCount' => 0,
+                    'areas' => [],
+                ];
+            }
 
             if (! $cycle) {
                 return [
@@ -548,22 +560,8 @@ class AccreditationAreaController extends Controller
                     'cycleId' => null,
                     'cycleStatus' => null,
                     'displayStatus' => 'Not Started',
-                    'documentCount' => 0,
-                    'areas' => [],
-                ];
-            }
-
-            $activeId = (int) ($program->active_cycle_id ?? 0);
-            $isActive = $activeId
-                ? (int) $cycle->id === $activeId
-                : $levelName === ($program->accreditation_level ?: 'Level I');
-
-            if (! $isActive) {
-                return [
-                    'level' => $levelName,
-                    'cycleId' => $cycle->id,
-                    'cycleStatus' => $cycle->status,
-                    'displayStatus' => $cycle->display_status,
+                    'access' => 'open',
+                    'isOpen' => false,
                     'documentCount' => 0,
                     'areas' => [],
                 ];
@@ -602,7 +600,11 @@ class AccreditationAreaController extends Controller
                 'level' => $levelName,
                 'cycleId' => $cycle->id,
                 'cycleStatus' => $cycle->status,
-                'displayStatus' => $cycle->display_status,
+                'displayStatus' => $cycle->id === $prepared['program']->active_cycle_id
+                    ? ($cycle->display_status === 'Not Started' ? 'In Progress' : $cycle->display_status)
+                    : $cycle->display_status,
+                'access' => 'open',
+                'isOpen' => true,
                 'documentCount' => (int) $documentCounts->sum() + (int) $evidenceCounts->sum(),
                 'areas' => $areas->map(function (AccreditationArea $area) use ($user, $cycle, $documentCounts, $evidenceCounts) {
                     $review = $area->reviews->first();
@@ -634,10 +636,10 @@ class AccreditationAreaController extends Controller
             'success' => true,
             'message' => 'Area documents retrieved successfully.',
             'data' => [
-                'programId' => $program->id,
-                'programName' => $program->name,
-                'activeCycleId' => $program->active_cycle_id,
-                'activeLevel' => $program->activeCycle?->level,
+                'programId' => $prepared['program']->id,
+                'programName' => $prepared['program']->name,
+                'activeCycleId' => $prepared['program']->active_cycle_id,
+                'activeLevel' => $prepared['currentLevel'],
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
                 'levels' => $levels->values(),
             ],
@@ -820,7 +822,7 @@ class AccreditationAreaController extends Controller
      */
     public function setDeadline(Request $request, AccreditationArea $accreditationArea)
     {
-        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'deadline' => ['required', 'date'],
         ]);
@@ -903,7 +905,7 @@ class AccreditationAreaController extends Controller
      */
     public function setMembers(Request $request, AccreditationArea $accreditationArea)
     {
-        $this->assertCanManageCycle($request->user(), $accreditationArea->cycle()->firstOrFail());
+        $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
             'user_ids' => ['present', 'array'],
             'user_ids.*' => ['integer', 'distinct', 'exists:users,id'],
@@ -952,6 +954,26 @@ class AccreditationAreaController extends Controller
         app(AaccupStructureService::class)->seedCycleAreas($cycle);
     }
 
+    /**
+     * @return array{program: Program, currentLevel: string, cyclesByLevel: \Illuminate\Support\Collection}
+     */
+    private function prepareProgramLevels(Program $program): array
+    {
+        app(AaccupStructureService::class)->ensureOpenLevels($program);
+        $program->unsetRelation('accreditationCycles');
+        $program->unsetRelation('activeCycle');
+        $program->load(['accreditationCycles', 'activeCycle']);
+
+        return [
+            'program' => $program,
+            'currentLevel' => AccreditationCycle::currentLevelFor($program),
+            'cyclesByLevel' => $program->accreditationCycles
+                ->sortByDesc('created_at')
+                ->unique('level')
+                ->values(),
+        ];
+    }
+
     private function assertCanViewCycle($user, AccreditationCycle $cycle): void
     {
         if (! $user || $user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor() || $user->isDean()) {
@@ -982,6 +1004,16 @@ class AccreditationAreaController extends Controller
     {
         if (! $user || ! $user->isProgramChair() || (int) $cycle->program()->value('chair_id') !== (int) $user->id) {
             abort(403, 'Only the assigned Program Chair may manage this accreditation area.');
+        }
+    }
+
+    private function assertCycleIsOpenForAssignment($user, AccreditationCycle $cycle): void
+    {
+        $this->assertCanManageCycle($user, $cycle);
+        $cycle->loadMissing('program');
+
+        if ($cycle->program && AccreditationCycle::isReachedFor($cycle->program, (string) $cycle->level)) {
+            abort(422, 'This accreditation level was already reached and can no longer be assigned.');
         }
     }
 }

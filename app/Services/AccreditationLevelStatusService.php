@@ -127,15 +127,22 @@ class AccreditationLevelStatusService
             ->sortByDesc('created_at')
             ->unique(fn (AccreditationCycle $cycle) => $cycle->level);
 
-        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $level) use ($latestByLevel) {
+        $levels = collect(AccreditationCycle::LEVELS)->map(function (string $level) use ($latestByLevel, $program) {
             $cycle = $latestByLevel->firstWhere('level', $level);
+            $reached = AccreditationCycle::isReachedFor($program, $level);
 
             return [
                 'level' => $level,
                 'cycleId' => $cycle?->id,
                 'cycleStatus' => $cycle?->status,
                 'preparationStatus' => $cycle?->preparation_status,
-                'displayStatus' => $cycle?->display_status ?? 'Not Started',
+                'displayStatus' => $reached
+                    ? 'Reached'
+                    : ($cycle?->id === $program->active_cycle_id && $cycle?->display_status === 'Not Started'
+                        ? 'In Progress'
+                        : ($cycle?->display_status ?? 'Not Started')),
+                'access' => $reached ? 'reached' : 'open',
+                'isOpen' => ! $reached && $cycle !== null,
                 'validUntil' => $cycle?->valid_until?->toDateString(),
                 'validityStatus' => $cycle?->validity_status ?? 'Not set',
                 'scheduledVisit' => $cycle?->scheduled_visit?->toDateString(),

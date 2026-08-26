@@ -118,6 +118,24 @@ class AaccupStructureService
                 'accreditation_level' => $level,
             ]);
         }
+
+        $program->refresh();
+        $this->ensureOpenLevels($program);
+    }
+
+    /**
+     * Current program level and every higher AACCUP level stay open.
+     * Lower levels are treated as already reached and are not created here.
+     */
+    public function ensureOpenLevels(Program $program): void
+    {
+        $current = AccreditationCycle::currentLevelFor($program);
+
+        foreach (AccreditationCycle::LEVELS as $level) {
+            if (AccreditationCycle::rank($level) >= AccreditationCycle::rank($current)) {
+                $this->ensureCycle($program, $level);
+            }
+        }
     }
 
     private function templateHasCanonicalAreas(InstrumentTemplate $template): bool

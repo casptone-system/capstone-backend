@@ -25,7 +25,7 @@ class FacultyAreaContentController extends Controller
         $user = $request->user();
         $areaIds = $user->assignedAreaIds();
 
-        $areas = AccreditationArea::with(['chair', 'cycle.program', 'members', 'reviews'])
+        $areas = AccreditationArea::with(['chair', 'cycle.program.chairUser', 'members.user', 'reviews'])
             ->whereIn('id', $areaIds)
             ->whereNotNull('code')
             ->orderBy('code')
@@ -47,12 +47,17 @@ class FacultyAreaContentController extends Controller
 
         $areas = ActiveCycle::uniqueAreasPerProgram($areas);
 
+        $progress = app(AreaProgressService::class);
+        $areas->each(fn (AccreditationArea $area) => $progress->refresh($area));
+
         return response()->json([
             'success' => true,
             'message' => 'Assigned areas retrieved successfully.',
             'data' => MyAreaResource::collection($areas),
             'meta' => [
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+                'taskStats' => $progress->workloadForAreas($areas),
+                'teamMembers' => $progress->teamMembersForAreas($areas),
             ],
         ]);
     }
@@ -253,6 +258,7 @@ class FacultyAreaContentController extends Controller
             $document->delete();
         }
 
+        app(AreaProgressService::class)->clearDoneWithoutFiles($parameterContentRow->id);
         app(AreaProgressService::class)->refresh($parameterContentRow->parameter?->area);
 
         $parameterContentRow->unsetRelation('documents');
@@ -261,6 +267,46 @@ class FacultyAreaContentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'All files for this row were removed.',
+            'data' => new ParameterContentRowResource($parameterContentRow),
+        ]);
+    }
+
+    public function submitRow(Request $request, ParameterContentRow $parameterContentRow)
+    {
+        $parameterContentRow->load(['parameter.area', 'documents']);
+        AreaEvidenceGate::assertCanManageEvidence($request->user(), $parameterContentRow->parameter?->area);
+
+        if ($parameterContentRow->isSectionHeading()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Section headings cannot be submitted.',
+            ], 422);
+        }
+
+        if ($parameterContentRow->documents->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Upload at least one PDF before submitting this row.',
+            ], 422);
+        }
+
+        $status = ParameterRowStatus::updateOrCreate(
+            ['content_row_id' => $parameterContentRow->id],
+            [
+                'is_done' => true,
+                'done_by' => $request->user()->id,
+                'done_at' => now(),
+            ]
+        );
+
+        app(AreaProgressService::class)->refresh($parameterContentRow->parameter?->area);
+
+        $parameterContentRow->setRelation('status', $status->load('doneBy'));
+        $parameterContentRow->load(['documents.versions', 'documents.uploader']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Row submitted.',
             'data' => new ParameterContentRowResource($parameterContentRow),
         ]);
     }

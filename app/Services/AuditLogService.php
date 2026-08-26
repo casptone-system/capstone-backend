@@ -55,11 +55,11 @@ class AuditLogService
             return 'logout';
         }
 
-        if (preg_match('#reviews/\d+/approve#', $path)) {
+        if (preg_match('#(reviews|documents)/\d+/approve#', $path)) {
             return 'review_approved';
         }
 
-        if (preg_match('#reviews/\d+/request-revision#', $path)) {
+        if (preg_match('#(reviews|documents)/\d+/request-revision#', $path)) {
             return 'review_revision_requested';
         }
 

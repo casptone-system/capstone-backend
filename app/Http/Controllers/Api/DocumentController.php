@@ -231,6 +231,65 @@ class DocumentController extends Controller
     }
 
     /**
+     * Program Chair approves a submitted evidence file.
+     */
+    public function approve(Request $request, Document $document)
+    {
+        $this->authorize('approve', $document);
+
+        if (! in_array($document->status, ['Active', 'Draft'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Cannot approve a document with status '{$document->status}'.",
+            ], 422);
+        }
+
+        $document->update(['status' => 'Approved']);
+
+        if ($document->content_row_id) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Document approved successfully.',
+            'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
+        ], 200);
+    }
+
+    /**
+     * Program Chair returns a file for revision (Revision Requested).
+     */
+    public function requestRevision(Request $request, Document $document)
+    {
+        $this->authorize('requestRevision', $document);
+
+        $validated = $request->validate([
+            'comment' => ['required', 'string'],
+        ]);
+
+        if (! in_array($document->status, ['Active', 'Draft', 'Approved'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Cannot request revision for a document with status '{$document->status}'.",
+            ], 422);
+        }
+
+        $document->update(['status' => 'Revision Requested']);
+
+        if ($document->content_row_id) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Revision requested.',
+            'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
+            'comment' => $validated['comment'],
+        ], 200);
+    }
+
+    /**
      * Remove the specified document and its files.
      */
     public function destroy(Document $document)
@@ -295,8 +354,15 @@ class DocumentController extends Controller
             'uploaded_by' => $request->user()->id,
         ]);
 
-        // Update the document's current version
-        $document->update(['current_version' => $newVersion]);
+        $updates = ['current_version' => $newVersion];
+        if (in_array($document->status, ['Revision Requested', 'Approved'], true)) {
+            $updates['status'] = 'Active';
+        }
+        $document->update($updates);
+
+        if ($document->content_row_id) {
+            app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+        }
 
         return response()->json([
             'success' => true,
