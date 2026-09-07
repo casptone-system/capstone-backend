@@ -22,8 +22,8 @@ return [
     |
     | Accreditation evidence and role-vault files use this disk. Keep
     | FILESYSTEM_DISK=local so profile photos (`public`) stay on the
-    | public disk. Set EVIDENCE_DISK=s3 to write objects to Supabase
-    | Storage (or any S3-compatible host such as Cloudflare R2).
+    | public disk. Set EVIDENCE_DISK=supabase for Supabase Storage via
+    | the service role, or EVIDENCE_DISK=s3 for S3-compatible hosts.
     |
     */
 
@@ -77,6 +77,15 @@ return [
             'url' => env('APP_URL').'/storage',
             'visibility' => 'public',
             'throw' => false,
+            'report' => false,
+        ],
+
+        'supabase' => [
+            'driver' => 'supabase',
+            'url' => env('SUPABASE_URL'),
+            'key' => env('SUPABASE_SERVICE_ROLE_KEY'),
+            'bucket' => env('SUPABASE_STORAGE_BUCKET', env('AWS_BUCKET', 'accreditation-documents')),
+            'throw' => true,
             'report' => false,
         ],
 

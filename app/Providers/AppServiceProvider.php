@@ -21,9 +21,13 @@ use App\Policies\ProgramMemberPolicy;
 use App\Policies\ProgramPolicy;
 use App\Policies\ReviewPolicy;
 use App\Policies\TaskPolicy;
+use App\Filesystem\SupabaseStorageAdapter;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
+use League\Flysystem\Filesystem;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -40,6 +44,20 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Storage::extend('supabase', function ($app, array $config) {
+            $adapter = new SupabaseStorageAdapter(
+                (string) ($config['url'] ?? ''),
+                (string) ($config['key'] ?? ''),
+                (string) ($config['bucket'] ?? 'accreditation-documents'),
+            );
+
+            return new FilesystemAdapter(
+                new Filesystem($adapter, $config),
+                $adapter,
+                $config
+            );
+        });
+
         Log::extend('audit', function ($app, array $config) {
             return new \Monolog\Logger('audit', [
                 new \Monolog\Handler\StreamHandler(storage_path('logs/audit.log'), \Monolog\Logger::INFO),

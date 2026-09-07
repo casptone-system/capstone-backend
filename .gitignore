@@ -25,4 +25,6 @@ Thumbs.db
 database/*.sqlite
 .e2e-credentials.json
 /storage/app/adams-tidb.env
+/storage/app/adams-supabase.env
+/storage/app/adams-supabase-token.env
 database/*.sqlite3

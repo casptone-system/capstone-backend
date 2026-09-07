@@ -8,6 +8,7 @@ $defaultOrigins = [
     'http://127.0.0.1:5173',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
+    'https://isu-adams.pages.dev',
     'https://adams.pages.dev',
     'https://adams-5od.pages.dev',
     'https://adams-frontend.pages.dev',
@@ -33,6 +34,7 @@ return [
     'allowed_origins_patterns' => [
         '/^https?:\/\/(localhost|127\.0\.0\.1):\d+$/',
         '/^https:\/\/([a-z0-9-]+\.)?adams(-[a-z0-9]+)?\.pages\.dev$/',
+        '/^https:\/\/([a-z0-9-]+\.)?isu-adams\.pages\.dev$/',
     ],
 
     'allowed_headers' => ['*'],

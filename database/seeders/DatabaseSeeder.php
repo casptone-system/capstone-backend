@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
@@ -20,21 +19,7 @@ class DatabaseSeeder extends Seeder
             OrgStructureSeeder::class,
             AccreditationAreaSeeder::class,
             InstrumentTemplateSeeder::class,
+            DemoUsersSeeder::class,
         ]);
-
-        if (!app()->environment('production')) {
-            User::firstOrCreate(
-                ['email' => 'test@example.com'],
-                [
-                    'name' => 'Test User',
-                    'first_name' => 'Test',
-                    'middle_name' => null,
-                    'last_name' => 'User',
-                    'email' => 'test@example.com',
-                    'password' => bcrypt('password'),
-                    'email_verified_at' => now(),
-                ]
-            );
-        }
     }
 }
