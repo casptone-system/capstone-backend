@@ -21,9 +21,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Accreditation evidence and role-vault files use this disk. Keep
-    | FILESYSTEM_DISK=local so profile photos (`public`) and Dean/instrument
-    | files (`private`) are unaffected. Set EVIDENCE_DISK=s3 to write those
-    | objects to Cloudflare R2.
+    | FILESYSTEM_DISK=local so profile photos (`public`) stay on the
+    | public disk. Set EVIDENCE_DISK=s3 to write objects to Supabase
+    | Storage (or any S3-compatible host such as Cloudflare R2).
     |
     */
 

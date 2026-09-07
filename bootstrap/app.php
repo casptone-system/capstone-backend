@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'rbac' => \App\Http\Middleware\EnforceRbac::class,
             'audit.api' => \App\Http\Middleware\AuditApiActions::class,
         ]);
+        $middleware->trustProxies(at: '*');
         $middleware->use([
             \Illuminate\Http\Middleware\HandleCors::class,
         ]);

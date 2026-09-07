@@ -28,6 +28,11 @@ class EvidenceStorage
         return Storage::disk('local');
     }
 
+    public function store(string $directory, UploadedFile $file): string
+    {
+        return $file->store($directory, $this->diskName());
+    }
+
     public function putFileAs(string $directory, UploadedFile $file, string $name): string
     {
         return $file->storeAs($directory, $name, $this->diskName());
@@ -57,6 +62,10 @@ class EvidenceStorage
             return 'local';
         }
 
+        if (Storage::disk('private')->exists($path)) {
+            return 'private';
+        }
+
         return null;
     }
 
@@ -70,6 +79,10 @@ class EvidenceStorage
 
         if ($this->diskName() !== 'local' && $this->localDisk()->exists($path)) {
             $deleted = $this->localDisk()->delete($path) || $deleted;
+        }
+
+        if (Storage::disk('private')->exists($path)) {
+            $deleted = Storage::disk('private')->delete($path) || $deleted;
         }
 
         return $deleted;

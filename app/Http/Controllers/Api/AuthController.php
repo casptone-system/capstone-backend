@@ -404,7 +404,7 @@ class AuthController extends Controller
         // Original logic: validate signature, check user exists, verify hash, mark email verified
         // All users are now auto-verified on registration
 
-        $frontendUrl = env('FRONTEND_URL', config('app.frontend_url', config('app.url')));
+        $frontendUrl = config('app.frontend_url', config('app.url'));
         return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=success');
     }
 

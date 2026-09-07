@@ -16,6 +16,10 @@ use Illuminate\Support\Facades\DB;
 
 class AccreditationWorkspaceService
 {
+    public function __construct(private EvidenceStorage $evidenceStorage)
+    {
+    }
+
     public function createForProgramChair(User $user, string $level, ?string $deadline): AccreditationWorkspace
     {
         if (! $user->isProgramChair()) {
@@ -281,7 +285,10 @@ class AccreditationWorkspaceService
             abort(403, 'You are not assigned to this area.');
         }
 
-        $path = $file->store("accreditation/workspace-{$workspace->id}/criteria-{$requirement->id}", 'private');
+        $path = $this->evidenceStorage->store(
+            "accreditation/workspace-{$workspace->id}/criteria-{$requirement->id}",
+            $file
+        );
 
         $evidence = CriterionEvidence::create([
             'requirement_id' => $requirement->id,

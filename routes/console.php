@@ -20,9 +20,11 @@ Schedule::command('notifications:check-area-deadlines')
     ->description('Remind Area In-Charge and members about incomplete area deadlines')
     ->withoutOverlapping();
 
-// Schedule a daily backup of the database as a demonstration of recovery planning.
+// Local mysqldump backup. Disabled on Railway/PaaS — disk is ephemeral and
+// mysqldump is often missing. Use Railway MySQL backups instead.
 Schedule::command('database:backup --compress=gzip')
     ->dailyAt('02:00')
     ->description('Daily compressed database backup')
     ->withoutOverlapping()
-    ->onOneServer();
+    ->onOneServer()
+    ->when(fn () => (bool) env('ENABLE_LOCAL_DB_BACKUP', false));

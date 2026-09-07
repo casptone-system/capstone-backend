@@ -1,0 +1,80 @@
+ADAMS production console steps
+================================
+Code in both repos is deploy-ready. Complete these in order in the
+Hostinger, Railway, and Supabase dashboards. Copy variable names exactly.
+
+Phase 2 — Supabase Storage
+--------------------------
+1. https://supabase.com → New project (region ap-southeast-1 / Singapore).
+2. Storage → New bucket
+   Name: accreditation-documents
+   Public: OFF (private)
+3. Project Settings → Storage → S3 Access Keys → Create access key.
+4. Project Settings → General → copy Reference ID (project-ref).
+5. Paste into the Railway Laravel service:
+
+   EVIDENCE_DISK=s3
+   AWS_ACCESS_KEY_ID=<supabase-s3-access-key>
+   AWS_SECRET_ACCESS_KEY=<supabase-s3-secret>
+   AWS_BUCKET=accreditation-documents
+   AWS_ENDPOINT=https://<project-ref>.storage.supabase.co/storage/v1/s3
+   AWS_DEFAULT_REGION=ap-southeast-1
+   AWS_USE_PATH_STYLE_ENDPOINT=true
+
+   Do not put these keys in the Vue app. Laravel streams files via
+   authenticated /api/.../download routes.
+
+Phase 3 — Railway MySQL
+-----------------------
+1. https://railway.app → New Project → "adams-backend".
+2. Add plugin → MySQL (managed backups stay on this plugin).
+3. On the Laravel service, map the private hostname (not MYSQL_PUBLIC_URL):
+
+   DB_CONNECTION=mysql
+   DB_HOST=${{MySQL.MYSQLHOST}}
+   DB_PORT=${{MySQL.MYSQLPORT}}
+   DB_DATABASE=${{MySQL.MYSQLDATABASE}}
+   DB_USERNAME=${{MySQL.MYSQLUSER}}
+   DB_PASSWORD=${{MySQL.MYSQLPASSWORD}}
+
+   Alternative: DB_URL=${{MySQL.MYSQL_URL}}
+
+Phase 4 — Railway Laravel API
+-----------------------------
+1. Same project → New → GitHub Repo → capstone-backend
+   (https://github.com/casptone-system/capstone-backend.git)
+2. Generate APP_KEY locally: php artisan key:generate --show
+3. Copy every variable from railway.env.example (this repo root).
+   Set APP_URL to the Railway HTTPS domain after the first deploy.
+   Set FRONTEND_URL and CORS_ALLOWED_ORIGINS to the Hostinger HTTPS domain.
+4. start.sh already runs: php artisan migrate --force
+   then: php artisan serve --host=0.0.0.0 --port=$PORT
+5. Health: GET https://<api-host>/up  and  GET https://<api-host>/api/health
+6. First deploy only, from Railway shell if you need seed data:
+   php artisan db:seed --force
+7. Optional Cron service in the same project:
+   Schedule: * * * * *
+   Start command: php artisan schedule:run
+8. Existing local files: php artisan storage:migrate-evidence --direction=to-r2 --sync
+
+Phase 5 — Hostinger SPA
+-----------------------
+1. Edit capstone_frontend/.env.production:
+
+   VUE_APP_API_BASE_URL=https://<railway-api-host>/api
+   VUE_APP_BACKEND_TYPE=laravel
+
+2. npm install
+   npm run build
+3. Upload the CONTENTS of dist/ (including .htaccess) to public_html
+   or the subdomain folder.
+4. hPanel → SSL → enable Let's Encrypt on the domain.
+
+Phase 6 — Smoke test on the Hostinger URL
+-----------------------------------------
+[ ] Login POST /api/login — no CORS errors
+[ ] Refresh stays logged in (Bearer token)
+[ ] Upload an accreditation document — object appears in Supabase bucket
+[ ] Download / preview that document
+[ ] Password-reset email opens the Hostinger domain
+[ ] Refresh /user/dashboard/... does not 404
