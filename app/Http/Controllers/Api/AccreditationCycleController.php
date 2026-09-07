@@ -9,6 +9,7 @@ use App\Models\Program;
 use App\Models\User;
 use App\Notifications\AccreditationCycleNoticeNotification;
 use App\Services\AccreditationLevelStatusService;
+use App\Services\AreaProgressService;
 use App\Support\ActiveCycle;
 use App\Support\OrgScope;
 use App\Support\RoleGate;
@@ -483,10 +484,8 @@ class AccreditationCycleController extends Controller
     {
         $program = $cycle->program;
         $college = $program?->college;
-        $documentCount = $program ? \App\Models\Document::where('program_id', $program->id)->count() : 0;
-        $totalAreas = \App\Models\AccreditationArea::where('cycle_id', $cycle->id)->whereNotNull('code')->count();
-        $evidenceScore = $totalAreas > 0
-            ? (int) round(($documentCount / max(1, $totalAreas)) * 100)
+        $evidenceScore = $program
+            ? app(AreaProgressService::class)->programPercent($program)
             : 0;
 
         $riskReasons = [];

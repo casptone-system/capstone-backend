@@ -118,6 +118,17 @@ class DocumentController extends Controller
     {
         $this->authorize('create', Document::class);
 
+        if (! $request->filled('program_id')) {
+            $area = AreaEvidenceGate::resolveArea(
+                $request->filled('area_id') ? (int) $request->input('area_id') : null,
+                $request->filled('content_row_id') ? (int) $request->input('content_row_id') : null
+            );
+            $programId = $area?->cycle()->value('program_id');
+            if ($programId) {
+                $request->merge(['program_id' => $programId]);
+            }
+        }
+
         $validated = $request->validate([
             'program_id' => ['required', 'exists:programs,id'],
             'area_id' => ['nullable', 'exists:accreditation_areas,id'],
@@ -165,7 +176,19 @@ class DocumentController extends Controller
 
         // Store the file
         $versionPath = "documents/{$document->id}/v1";
-        $filePath = $this->evidenceStorage->putFileAs($versionPath, $file, $originalName);
+        try {
+            $filePath = $this->evidenceStorage->putFileAs($versionPath, $file, $originalName);
+        } catch (\Throwable $e) {
+            $document->delete();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'The file could not be stored. Please try again.',
+                'errors' => [
+                    'file' => ['The file could not be stored. Please try again.'],
+                ],
+            ], 422);
+        }
 
         // Create the version record
         $document->versions()->create([
@@ -254,6 +277,7 @@ class DocumentController extends Controller
             'success' => true,
             'message' => 'Document approved successfully.',
             'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
+            ...$this->progressPayload($document),
         ], 200);
     }
 
@@ -286,6 +310,7 @@ class DocumentController extends Controller
             'message' => 'Revision requested.',
             'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
             'comment' => $validated['comment'],
+            ...$this->progressPayload($document),
         ], 200);
     }
 
@@ -367,7 +392,8 @@ class DocumentController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Document replaced successfully.',
-            'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
+            'data' => new DocumentResource($document->fresh()->load('program', 'area', 'task', 'uploader', 'versions')),
+            ...$this->progressPayload($document->fresh()),
         ], 200);
     }
 
@@ -502,5 +528,24 @@ class DocumentController extends Controller
                 $user->notify(new DocumentUploadedNotification($document, $uploader->name));
             }
         }
+    }
+
+    /**
+     * @return array{progressPercent: int, programCompletionRate: int, areaId: int|null, programId: int|null}
+     */
+    private function progressPayload(Document $document): array
+    {
+        $document->loadMissing(['area.cycle.program', 'contentRow.parameter.area.cycle.program', 'program']);
+
+        $area = $document->area ?: $document->contentRow?->parameter?->area;
+        $program = $document->program ?: $area?->cycle?->program;
+        $progress = app(AreaProgressService::class);
+
+        return [
+            'progressPercent' => $area ? (int) ($area->progress_percent ?? 0) : 0,
+            'programCompletionRate' => $program ? $progress->programPercent($program) : 0,
+            'areaId' => $area?->id,
+            'programId' => $program?->id,
+        ];
     }
 }

@@ -38,6 +38,11 @@ class EvidenceStorage
         return $file->storeAs($directory, $name, $this->diskName());
     }
 
+    public function put(string $path, string $contents): bool
+    {
+        return $this->disk()->put($path, $contents);
+    }
+
     public function writeStream(string $path, $stream): bool
     {
         return (bool) $this->disk()->writeStream($path, $stream);

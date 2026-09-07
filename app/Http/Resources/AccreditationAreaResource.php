@@ -24,6 +24,7 @@ class AccreditationAreaResource extends JsonResource
             'chairId' => $this->chair_id,
             'deadline' => $this->deadline?->toDateTimeString(),
             'status' => $this->status,
+            'progressPercent' => (int) ($this->progress_percent ?? 0),
             'createdAt' => $this->created_at?->toDateTimeString(),
             'updatedAt' => $this->updated_at?->toDateTimeString(),
             'chair' => $this->whenLoaded('chair', fn () => new UserResource($this->chair)),

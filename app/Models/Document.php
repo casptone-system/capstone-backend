@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Document extends Model
 {
@@ -170,10 +171,9 @@ class Document extends Model
     /**
      * Get the latest version of the document.
      */
-    public function latestVersion(): BelongsTo
+    public function latestVersion(): HasOne
     {
-        return $this->belongsTo(DocumentVersion::class, 'id', 'document_id')
-            ->where('version', $this->current_version)
-            ->latest();
+        return $this->hasOne(DocumentVersion::class, 'document_id')
+            ->ofMany('version', 'max');
     }
 }

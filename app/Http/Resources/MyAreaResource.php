@@ -34,7 +34,7 @@ class MyAreaResource extends JsonResource
             'status' => $this->status,
             'deadline' => $this->deadline?->toDateTimeString(),
             'assignmentRole' => $assignmentRole,
-            'canUpload' => $isChair,
+            'canUpload' => $isChair || $isMember,
             'canSubmit' => $canSubmit,
             'reviewStatus' => $reviewStatus,
             'progressPercent' => (int) ($this->progress_percent ?? 0),

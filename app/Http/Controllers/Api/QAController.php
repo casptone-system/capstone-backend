@@ -5,9 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
-use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
+use App\Services\AreaProgressService;
 use App\Support\ActiveCycle;
 use Illuminate\Http\Request;
 
@@ -21,10 +21,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        // Verify user is QA
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can access the QA dashboard.');
-        }
+        $this->assertCanMonitor($user);
 
         // --- Active Programs ---
         $activePrograms = AccreditationCycle::whereNotIn('status', ['Ready', 'Completed', 'Expired'])
@@ -37,10 +34,12 @@ class QAController extends Controller
             ->distinct('program_id')
             ->count('program_id');
 
+        $progress = app(AreaProgressService::class);
+
         // --- Evidence Completion % ---
-        $totalAreas = AccreditationArea::count();
-        $areasWithEvidence = AccreditationArea::whereHas('documents')->count();
-        $evidenceCompletion = $totalAreas > 0 ? round(($areasWithEvidence / $totalAreas) * 100) : 0;
+        $evidenceCompletion = Program::query()->get()
+            ->map(fn (Program $program) => $progress->programPercent($program))
+            ->avg() ?? 0;
 
         // --- Pending Reviews ---
         $pendingReviews = Review::whereNotIn('current_status', ['Ready', 'Rejected'])->count();
@@ -51,14 +50,13 @@ class QAController extends Controller
             ->orderBy('updated_at', 'desc')
             ->get()
             ->unique('program_id')
-            ->map(function ($cycle) {
+            ->map(function ($cycle) use ($progress) {
                 $program = $cycle->program;
                 $college = $program?->college;
-                $totalAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))->count();
-                $areasWithEvidence = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))
-                    ->whereHas('documents')
-                    ->count();
-                $readiness = $totalAreas > 0 ? round(($areasWithEvidence / $totalAreas) * 100) : 0;
+                $areas = $program ? $progress->activeAreasForProgram($program) : collect();
+                $totalAreas = $areas->count();
+                $readiness = $program ? $progress->programPercent($program) : 0;
+                $areasWithEvidence = $areas->filter(fn ($area) => (int) $area->progress_percent > 0)->count();
 
                 return [
                     'id' => $cycle->id,
@@ -102,19 +100,18 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can access reports.');
-        }
+        $this->assertCanMonitor($user);
+
+        $progress = app(AreaProgressService::class);
 
         $programs = Program::with('college')
             ->get()
-            ->map(function ($program) {
-                $cycle = AccreditationCycle::where('program_id', $program->id)->latest()->first();
-                $totalAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))->count();
-                $completedAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))
-                    ->whereHas('documents')
-                    ->count();
-                $readiness = $totalAreas > 0 ? round(($completedAreas / $totalAreas) * 100) : 0;
+            ->map(function ($program) use ($progress) {
+                $cycle = ActiveCycle::forProgram($program);
+                $areas = $progress->activeAreasForProgram($program);
+                $totalAreas = $areas->count();
+                $completedAreas = $areas->filter(fn ($area) => (int) $area->progress_percent >= 100)->count();
+                $readiness = $progress->programPercent($program);
 
                 return [
                     'program_id' => $program->id,
@@ -148,26 +145,23 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can access reports.');
-        }
+        $this->assertCanMonitor($user);
+
+        $progress = app(AreaProgressService::class);
 
         $colleges = \App\Models\College::get()
-            ->map(function ($college) {
+            ->map(function ($college) use ($progress) {
                 $programs = Program::where('college_id', $college->id)->get();
                 $totalAreas = 0;
                 $completedAreas = 0;
 
                 foreach ($programs as $program) {
-                    $cycleAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))->count();
-                    $cycleCompleted = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))
-                        ->whereHas('documents')
-                        ->count();
-                    $totalAreas += $cycleAreas;
-                    $completedAreas += $cycleCompleted;
+                    $areas = $progress->activeAreasForProgram($program);
+                    $totalAreas += $areas->count();
+                    $completedAreas += $areas->filter(fn ($area) => (int) $area->progress_percent >= 100)->count();
                 }
 
-                $readiness = $totalAreas > 0 ? round(($completedAreas / $totalAreas) * 100) : 0;
+                $readiness = $progress->collegePercent($college);
 
                 return [
                     'college_id' => $college->id,
@@ -197,21 +191,20 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can access reports.');
-        }
+        $this->assertCanMonitor($user);
 
         $threshold = $request->get('threshold', 70); // Programs below 70% are at risk
 
+        $progress = app(AreaProgressService::class);
+
         $atRiskPrograms = Program::with('college')
             ->get()
-            ->map(function ($program) {
-                $cycle = AccreditationCycle::where('program_id', $program->id)->latest()->first();
-                $totalAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))->count();
-                $completedAreas = AccreditationArea::whereHas('cycle', fn ($q) => $q->where('program_id', $program->id))
-                    ->whereHas('documents')
-                    ->count();
-                $readiness = $totalAreas > 0 ? round(($completedAreas / $totalAreas) * 100) : 0;
+            ->map(function ($program) use ($progress) {
+                $cycle = ActiveCycle::forProgram($program);
+                $areas = $progress->activeAreasForProgram($program);
+                $totalAreas = $areas->count();
+                $completedAreas = $areas->filter(fn ($area) => (int) $area->progress_percent >= 100)->count();
+                $readiness = $progress->programPercent($program);
 
                 return [
                     'program_id' => $program->id,
@@ -249,9 +242,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can access accreditation data.');
-        }
+        $this->assertCanMonitor($user);
 
         $cycles = ActiveCycle::uniquePerProgram(
             AccreditationCycle::with(['program.college', 'program.chairUser'])
@@ -281,9 +272,7 @@ class QAController extends Controller
     {
         $user = $request->user();
 
-        if (!$user || !$user->isQA()) {
-            abort(403, 'Only QA staff can view accreditation details.');
-        }
+        $this->assertCanMonitor($user);
 
         $program = $cycle->program;
         $areas = AccreditationArea::where('accreditation_cycle_id', $cycle->id)
@@ -310,5 +299,12 @@ class QAController extends Controller
                 'areas_with_evidence' => $areas->filter(fn ($a) => $a['documents_count'] > 0)->count(),
             ],
         ], 200);
+    }
+
+    private function assertCanMonitor($user): void
+    {
+        if (! $user || ! ($user->isQA() || $user->isAccreditor())) {
+            abort(403, 'Only QA staff or accreditors can access this view.');
+        }
     }
 }

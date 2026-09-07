@@ -50,6 +50,8 @@ class FacultyAreaContentController extends Controller
         $progress = app(AreaProgressService::class);
         $areas->each(fn (AccreditationArea $area) => $progress->refresh($area));
 
+        $assignedProgram = $user->assignedProgram();
+
         return response()->json([
             'success' => true,
             'message' => 'Assigned areas retrieved successfully.',
@@ -58,6 +60,7 @@ class FacultyAreaContentController extends Controller
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
                 'taskStats' => $progress->workloadForAreas($areas),
                 'teamMembers' => $progress->teamMembersForAreas($areas),
+                'programCompletionRate' => $assignedProgram ? $progress->programPercent($assignedProgram) : null,
             ],
         ]);
     }
@@ -347,7 +350,7 @@ class FacultyAreaContentController extends Controller
             abort(403, 'You are not allowed to view this area.');
         }
 
-        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin()) {
+        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor()) {
             return;
         }
 
@@ -367,8 +370,8 @@ class FacultyAreaContentController extends Controller
 
     private function assertCanViewInstitutionAreas(?User $user): void
     {
-        if (! $user || ! ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin())) {
-            abort(403, 'Only QA or VPAA/DI may list all accreditation areas.');
+        if (! $user || ! ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor())) {
+            abort(403, 'Only QA, VPAA/DI, or accreditors may list all accreditation areas.');
         }
     }
 

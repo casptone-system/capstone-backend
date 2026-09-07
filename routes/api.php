@@ -89,6 +89,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
+    Route::get('program-chair/review-documents', [AccreditationAreaController::class, 'programChairReviewDocuments']);
     Route::get('program-chair/areas/{accreditationArea}/documents', [AccreditationAreaController::class, 'programChairAreaDocumentFiles']);
     Route::post('accreditation-areas/{accreditationArea}/set-members', [AccreditationAreaController::class, 'setMembers']);
     Route::post('accreditation-areas/{accreditationArea}/set-deadline', [AccreditationAreaController::class, 'setDeadline']);

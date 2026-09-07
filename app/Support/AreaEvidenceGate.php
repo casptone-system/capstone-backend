@@ -30,8 +30,14 @@ class AreaEvidenceGate
 
     public static function assertCanManageEvidence(?User $user, ?AccreditationArea $area): void
     {
-        if (! $user || ! $area || ! $user->isChairOfArea($area)) {
-            abort(403, 'Only the assigned Area Chair may upload, edit, remove, or submit files for this area.');
+        if (! $user || ! $area) {
+            abort(403, 'You must be assigned to this area to manage its evidence.');
         }
+
+        if ($user->isChairOfArea($area) || $user->isAssignedToArea($area)) {
+            return;
+        }
+
+        abort(403, 'Only the assigned Area Chair or area members may upload, edit, remove, or submit files for this area.');
     }
 }

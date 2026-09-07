@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
             AccreditationAreaSeeder::class,
             InstrumentTemplateSeeder::class,
             DemoUsersSeeder::class,
+            DemoProgressSeeder::class,
         ]);
     }
 }

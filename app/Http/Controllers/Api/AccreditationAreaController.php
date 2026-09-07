@@ -520,6 +520,7 @@ class AccreditationAreaController extends Controller
                 'activeCycleId' => $prepared['program']->active_cycle_id,
                 'activeLevel' => $prepared['currentLevel'],
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+                'programCompletionRate' => app(AreaProgressService::class)->programPercent($prepared['program']),
                 'levels' => $levels->values(),
             ],
         ], 200);
@@ -620,6 +621,7 @@ class AccreditationAreaController extends Controller
                         'code' => $area->code,
                         'name' => $area->name,
                         'status' => $area->status,
+                        'progressPercent' => (int) ($area->progress_percent ?? 0),
                         'documentCount' => $documentCount,
                         'chair' => $area->chair ? [
                             'id' => $area->chair->id,
@@ -641,7 +643,50 @@ class AccreditationAreaController extends Controller
                 'activeCycleId' => $prepared['program']->active_cycle_id,
                 'activeLevel' => $prepared['currentLevel'],
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
+                'programCompletionRate' => app(AreaProgressService::class)->programPercent($prepared['program']),
                 'levels' => $levels->values(),
+            ],
+        ], 200);
+    }
+
+    /**
+     * One-shot pending review queue for the Program Chair (Active/Draft PDFs only).
+     */
+    public function programChairReviewDocuments(Request $request)
+    {
+        $user = $request->user() ?? $request->user('api');
+        $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before reviewing documents.');
+        $progress = app(AreaProgressService::class);
+
+        $documents = Document::with(['uploader', 'versions', 'area', 'contentRow.parameter.area'])
+            ->forProgram((int) $program->id)
+            ->pdfOnly()
+            ->whereIn('status', ['Active', 'Draft'])
+            ->orderByDesc('updated_at')
+            ->get()
+            ->map(function (Document $document) use ($request) {
+                $payload = (new DocumentResource($document))->toArray($request);
+                $area = $document->area ?: $document->contentRow?->parameter?->area;
+                $payload['source'] = 'document';
+                $payload['area'] = $area ? [
+                    'id' => $area->id,
+                    'code' => $area->code,
+                    'name' => $area->name,
+                    'progressPercent' => (int) ($area->progress_percent ?? 0),
+                ] : null;
+
+                return $payload;
+            })
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Pending review documents retrieved successfully.',
+            'data' => [
+                'programId' => $program->id,
+                'programName' => $program->name,
+                'programCompletionRate' => $progress->programPercent($program),
+                'documents' => $documents,
             ],
         ], 200);
     }

@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Models\AccreditationArea;
+use App\Models\College;
 use App\Models\Document;
 use App\Models\ParameterContentRow;
 use App\Models\ParameterRowStatus;
+use App\Models\Program;
 use App\Models\User;
+use App\Support\ActiveCycle;
 use Illuminate\Support\Collection;
 
 class AreaProgressService
@@ -214,21 +217,9 @@ class AreaProgressService
             ->all();
     }
 
-    public function breakdownForProgram(\App\Models\Program $program): array
+    public function breakdownForProgram(Program $program): array
     {
-        $program->loadMissing(['activeCycle', 'accreditationCycles']);
-        $cycle = \App\Support\ActiveCycle::forProgram($program);
-
-        if (! $cycle) {
-            return [];
-        }
-
-        $areas = AccreditationArea::query()
-            ->where('cycle_id', $cycle->id)
-            ->whereNotNull('code')
-            ->orderBy('code')
-            ->orderBy('id')
-            ->get();
+        $areas = $this->activeAreasForProgram($program);
 
         return $areas->map(function (AccreditationArea $area) {
             return [
@@ -236,9 +227,89 @@ class AreaProgressService
                 'code' => $area->code,
                 'name' => $area->name,
                 'label' => $area->sidebarLabel(),
-                'progressPercent' => $this->refresh($area),
+                'progressPercent' => $this->storedOrRefresh($area),
             ];
         })->values()->all();
+    }
+
+    /**
+     * Canonical program completion: average of AACCUP area progress on the active cycle.
+     */
+    public function programPercent(Program $program): int
+    {
+        $areas = $this->activeAreasForProgram($program);
+
+        if ($areas->isEmpty()) {
+            return (int) ($program->compliance_score ?? 0);
+        }
+
+        $average = $areas->avg(fn (AccreditationArea $area) => (int) ($area->progress_percent ?? 0));
+
+        return (int) round((float) $average);
+    }
+
+    public function collegePercent(College $college): int
+    {
+        $programs = Program::query()->where('college_id', $college->id)->get();
+
+        if ($programs->isEmpty()) {
+            return 0;
+        }
+
+        return (int) round($programs->avg(fn (Program $program) => $this->programPercent($program)));
+    }
+
+    public function syncProgramCompliance(?Program $program): int
+    {
+        if (! $program) {
+            return 0;
+        }
+
+        $percent = $this->programPercent($program);
+
+        if ((int) $program->compliance_score !== $percent) {
+            $program->forceFill(['compliance_score' => $percent])->save();
+        }
+
+        return $percent;
+    }
+
+    public function refreshAndSyncProgram(Program $program): int
+    {
+        foreach ($this->activeAreasForProgram($program) as $area) {
+            $this->refresh($area);
+        }
+
+        return $this->syncProgramCompliance($program->fresh() ?? $program);
+    }
+
+    /**
+     * @return Collection<int, AccreditationArea>
+     */
+    public function activeAreasForProgram(Program $program): Collection
+    {
+        $program->loadMissing(['activeCycle', 'accreditationCycles']);
+        $cycle = ActiveCycle::forProgram($program);
+
+        if (! $cycle) {
+            return collect();
+        }
+
+        return AccreditationArea::query()
+            ->where('cycle_id', $cycle->id)
+            ->whereNotNull('code')
+            ->orderBy('code')
+            ->orderBy('id')
+            ->get();
+    }
+
+    public function storedOrRefresh(AccreditationArea $area): int
+    {
+        if ($area->progress_percent !== null && $area->progress_computed_at) {
+            return (int) $area->progress_percent;
+        }
+
+        return $this->refresh($area);
     }
 
     private function teamPerson(User $user, string $role, string $areaLabel): array
@@ -260,6 +331,11 @@ class AreaProgressService
             'progress_percent' => $percent,
             'progress_computed_at' => now(),
         ])->save();
+
+        $area->loadMissing('cycle.program');
+        if ($area->cycle?->program) {
+            $this->syncProgramCompliance($area->cycle->program);
+        }
 
         return $percent;
     }
