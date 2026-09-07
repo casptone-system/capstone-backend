@@ -24,4 +24,5 @@ Homestead.yaml
 Thumbs.db
 database/*.sqlite
 .e2e-credentials.json
+/storage/app/adams-tidb.env
 database/*.sqlite3

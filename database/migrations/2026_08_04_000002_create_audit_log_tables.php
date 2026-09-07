@@ -64,11 +64,42 @@ return new class extends Migration
             $table->unique(['user_id', 'event']);
         });
 
-        if (Schema::getConnection()->getDriverName() === 'mysql') {
+        $this->createAuditLogTrigger();
+    }
 
-            DB::unprepared('DROP TRIGGER IF EXISTS trg_audit_logs_after_insert');
+    public function down(): void
+    {
+        $this->dropAuditLogTrigger();
 
-            DB::unprepared(<<<'SQL'
+        Schema::dropIfExists('audit_log_details');
+        Schema::dropIfExists('audit_log_summaries');
+        Schema::dropIfExists('audit_logs');
+    }
+
+    private function supportsMysqlTriggers(): bool
+    {
+        if (Schema::getConnection()->getDriverName() !== 'mysql') {
+            return false;
+        }
+
+        try {
+            $version = Schema::getConnection()->selectOne('SELECT VERSION() as v');
+            $value = strtolower((string) ($version->v ?? ''));
+
+            return ! str_contains($value, 'tidb');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function createAuditLogTrigger(): void
+    {
+        if (! $this->supportsMysqlTriggers()) {
+            return;
+        }
+
+        DB::unprepared('DROP TRIGGER IF EXISTS trg_audit_logs_after_insert');
+        DB::unprepared(<<<'SQL'
 CREATE TRIGGER trg_audit_logs_after_insert
 AFTER INSERT ON audit_logs
 FOR EACH ROW
@@ -83,15 +114,14 @@ BEGIN
         updated_at = NOW();
 END
 SQL);
-        }
     }
 
-    public function down(): void
+    private function dropAuditLogTrigger(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS trg_audit_logs_after_insert');
+        if (! $this->supportsMysqlTriggers()) {
+            return;
+        }
 
-        Schema::dropIfExists('audit_log_details');
-        Schema::dropIfExists('audit_log_summaries');
-        Schema::dropIfExists('audit_logs');
+        DB::unprepared('DROP TRIGGER IF EXISTS trg_audit_logs_after_insert');
     }
 };
