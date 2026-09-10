@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
-use App\Support\RoleSlug;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -72,57 +71,83 @@ class AuthController extends Controller
         ]);
     }
 
-    // DISABLED: Email verification check — temporarily off for dev, see [2026-08-18]
-    // if (! $user->hasVerifiedEmail()) {
-    //     throw ValidationException::withMessages([
-    //         'email' => ['Please verify your email address before signing in.'],
-    //     ]);
-    // }
-
-    // DISABLED: Duplicate IP-based login throttle check (first check already done above) — keeping removal for dev, see [2026-08-18]
-    // $ip = $request->ip() ?? 'unknown';
-    // $ipKey = 'login_ip_attempts:' . $ip;
-    // $ipCount = (int) Cache::get($ipKey, 0);
-    // $ipLimit = $this->getLoginIpLimitPerMinute();
-    // if ($ipCount >= $ipLimit) {
-    //     throw ValidationException::withMessages([
-    //         'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
-    //     ]);
-    // }
-    // Cache::put($ipKey, $ipCount + 1, 60);
-
-    // DISABLED: 2FA code generation & sending — temporarily off for dev, see [2026-08-18]
-    // $challenge = $this->createLoginChallenge($user);
-
-    // REPLACEMENT: Return auth token immediately after password validation (2FA skipped)
-    $token = $user->createToken('api-token')->plainTextToken;
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Authenticated successfully.',
-        'data' => [
-            'token' => $token,
-            'user' => new UserResource($user),
-        ],
-    ], 200);
+    // DISABLED for local testing: skip email verification and login 2FA.
+    return $this->issueAuthenticatedSession($user);
 }
 
     public function verifyTwoFactor(Request $request)
     {
-        // DISABLED: 2FA verification — backend skips code generation, see [2026-08-18]
-        // Original method body commented out for restoration:
-        // $validated = $request->validate([
-        //     'challenge_token' => ['required', 'string'],
-        //     'code' => ['required', 'string', 'size:6'],
-        // ]);
-        // ... validation logic ...
-        // $token = $user->createToken('api-token')->plainTextToken;
+        $validated = $request->validate([
+            'challenge_token' => ['required', 'string'],
+            'code' => ['required', 'string', 'size:6'],
+        ]);
 
-        // Return graceful no-op response
+        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
+        $challenge = Cache::get($cacheKey);
+
+        if (! $challenge) {
+            throw ValidationException::withMessages([
+                'challenge_token' => ['The login verification token is invalid or has expired. Please try signing in again.'],
+            ]);
+        }
+
+        if ((int) ($challenge['attempts'] ?? 0) >= 5) {
+            Cache::forget($cacheKey);
+            throw ValidationException::withMessages([
+                'code' => ['Too many invalid attempts. Please restart the login process.'],
+            ]);
+        }
+
+        $codeMatch = hash_equals($challenge['code_hash'], hash('sha256', $validated['code']));
+        if (! $codeMatch) {
+            $challenge['attempts'] = ((int) ($challenge['attempts'] ?? 0)) + 1;
+            Cache::put($cacheKey, $challenge, $this->getLoginChallengeTtl());
+
+            throw ValidationException::withMessages([
+                'code' => ['The verification code is incorrect. Please try again.'],
+            ]);
+        }
+
+        $user = User::find($challenge['user_id']);
+        Cache::forget($cacheKey);
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'challenge_token' => ['The login verification token is invalid. Please try again.'],
+            ]);
+        }
+
+        if (isset($user->status) && $user->status === 'inactive') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is inactive.'],
+            ]);
+        }
+
+        if (isset($user->status) && $user->status === 'locked') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is locked. Please contact an administrator.'],
+            ]);
+        }
+
+        return $this->issueAuthenticatedSession($user);
+    }
+
+    private function issueAuthenticatedSession(User $user)
+    {
+        if (! $user->email_verified_at) {
+            $user->forceFill(['email_verified_at' => now()])->save();
+        }
+
+        $token = $user->createToken('api-token')->plainTextToken;
+
         return response()->json([
-            'success' => false,
-            'message' => '2FA verification is skipped for development. Please use the login endpoint which now returns a token directly.',
-        ], 400);
+            'success' => true,
+            'message' => 'Authenticated successfully.',
+            'data' => [
+                'token' => $token,
+                'user' => new UserResource($user),
+            ],
+        ], 200);
     }
 
     private function createLoginChallenge(User $user): array
@@ -180,14 +205,91 @@ class AuthController extends Controller
 
     public function resendTwoFactor(Request $request)
     {
-        // DISABLED: 2FA resend — skipped in login, see [2026-08-18]
-        // Original logic: validate challenge token, check resend count, enforce cooldown, send new code
-        // 2FA code generation is now skipped entirely in login()
+        $validated = $request->validate([
+            'challenge_token' => ['required', 'string'],
+        ]);
+
+        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
+        $challenge = Cache::get($cacheKey);
+
+        if (! $challenge) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The login verification token is invalid or has expired. Please sign in again.',
+            ], 422);
+        }
+
+        $resendCount = (int) ($challenge['resend_count'] ?? 0);
+        Log::debug('resendTwoFactor state', ['challenge_key' => $cacheKey, 'resend_count' => $resendCount, 'last_resend_at' => $challenge['last_resend_at'] ?? null]);
+        if ($resendCount >= 3) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You have reached the maximum number of resends. Please sign in again.',
+            ], 429);
+        }
+
+        // Enforce a short cooldown between resends (per challenge)
+        $now = now()->getTimestamp();
+        $lastResend = isset($challenge['last_resend_at']) ? (int) $challenge['last_resend_at'] : 0;
+        // Defensive: if lastResend is in the future (clock skew), ignore it
+        if ($lastResend > $now) {
+            $lastResend = 0;
+        }
+
+        // Test helper: allow advancing perceived last_resend_at via header in unit tests
+        if (app()?->runningUnitTests() && $request->headers->has('X-Test-Advance-Seconds')) {
+            $advance = (int) $request->header('X-Test-Advance-Seconds');
+            if ($advance > 0) {
+                $lastResend = $lastResend - $advance;
+            }
+        }
+        $cooldown = $this->getResendCooldownSeconds();
+        // Allow the initial resend even if a last_resend_at exists unexpectedly.
+        if ($resendCount > 0 && $lastResend && ($now - $lastResend) < $cooldown) {
+            $remaining = $cooldown - ($now - $lastResend);
+            Log::debug('resendTwoFactor blocked', ['reason' => 'cooldown', 'remaining' => $remaining, 'challenge' => $cacheKey]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Please wait ' . $remaining . ' seconds before requesting another code.',
+            ], 429);
+        }
+
+        // IP-based global throttle: limit number of resend requests per IP per minute
+        $ip = $request->ip() ?? 'unknown'
+        ;
+        $ipKey = 'resend_2fa_ip:' . $ip;
+        $ipCount = (int) Cache::get($ipKey, 0);
+        $ipLimit = $this->getResendIpLimitPerMinute();
+        Log::debug('resendTwoFactor ip state', ['ip' => $ip, 'ipKey' => $ipKey, 'ipCount' => $ipCount, 'ipLimit' => $ipLimit]);
+        if ($ipCount >= $ipLimit) {
+            Log::debug('resendTwoFactor blocked', ['reason' => 'ip_limit', 'ip' => $ip, 'count' => $ipCount]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many resend requests from your IP address. Please wait and try again.',
+            ], 429);
+        }
+
+        Cache::put($ipKey, $ipCount + 1, 60);
+
+        // Generate a new code and reset attempts
+        $code = (string) random_int(100000, 999999);
+        $challenge['code_hash'] = hash('sha256', $code);
+        $challenge['attempts'] = 0;
+        $challenge['resend_count'] = $resendCount + 1;
+        $challenge['last_resend_at'] = $now;
+
+        $ttl = $this->getLoginChallengeTtl();
+        Cache::put($cacheKey, $challenge, $ttl);
+
+        // Send code
+        $this->sendLoginVerificationCode(User::find($challenge['user_id']), $code, (int) ($ttl / 60));
 
         return response()->json([
-            'success' => false,
-            'message' => '2FA resend is skipped for development. The login endpoint now returns a token directly.',
-        ], 400);
+            'success' => true,
+            'message' => 'Verification code resent.',
+            'expires_in' => $ttl,
+            'resend_count' => $challenge['resend_count'],
+        ], 200);
     }
 
     public function forgotPassword(Request $request)
@@ -289,7 +391,6 @@ class AuthController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
-                'approve reviews',
                 'request revisions',
             ],
             'program-chair' => [
@@ -299,7 +400,6 @@ class AuthController extends Controller
                 'assign chairs',
                 'review reports',
                 'manage reviews',
-                'approve reviews',
                 'request revisions',
             ],
             'area in-charge' => [
@@ -388,23 +488,64 @@ class AuthController extends Controller
 
     public function resendVerificationEmail(Request $request)
     {
-        // DISABLED: Email verification resend — no longer needed for dev, see [2026-08-18]
-        // Original logic: check if user exists, check if already verified, send verification email
-        // All users are now auto-verified on registration
+        $validated = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        $user = User::where('email', $validated['email'])->first();
+
+        if (! $user) {
+            return response()->json([
+                'success' => true,
+                'message' => 'If your account exists and is not already verified, we have sent a verification link to your email.',
+            ], 200);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'This email address is already verified. Please sign in.',
+            ], 200);
+        }
+
+        $user->sendEmailVerificationNotification();
 
         return response()->json([
             'success' => true,
-            'message' => 'Email verification skipped for development. All users are auto-verified on registration.',
+            'message' => 'Verification email resent. Please check your inbox and spam folder.',
         ], 200);
     }
 
     public function verifyEmail(Request $request, string $id, string $hash)
     {
-        // DISABLED: Email verification endpoint — no longer needed for dev, see [2026-08-18]
-        // Original logic: validate signature, check user exists, verify hash, mark email verified
-        // All users are now auto-verified on registration
+        $frontendUrl = env('FRONTEND_URL', config('app.frontend_url', config('app.url')));
+        $user = User::find($id);
+        $baseRedirect = rtrim($frontendUrl, '/') . '/email-verified?status=invalid';
 
-        $frontendUrl = config('app.frontend_url', config('app.url'));
+        if (! $request->hasValidSignature()) {
+            $redirectUrl = $baseRedirect;
+            if ($user) {
+                $redirectUrl .= '&email=' . urlencode($user->email);
+            }
+
+            return redirect()->away($redirectUrl);
+        }
+
+        if (! $user) {
+            return redirect()->away($baseRedirect);
+        }
+
+        if (! hash_equals((string) $hash, sha1($user->getEmailForVerification()))) {
+            $redirectUrl = $baseRedirect . '&email=' . urlencode($user->email);
+            return redirect()->away($redirectUrl);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=already_verified');
+        }
+
+        $user->markEmailAsVerified();
+
         return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=success');
     }
 
@@ -442,7 +583,12 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $isSuperAdmin = $creator && $creator->isSuperAdmin();
+        $isSuperAdmin = $creator && (
+            $creator->hasRole('Super Administrator') ||
+            $creator->hasRole('Super Admin') ||
+            $creator->hasRole('super administrator') ||
+            $creator->hasRole('superadmin')
+        );
 
         $profilePhotoRules = ['nullable', 'image', 'max:10240'];
         if ($isSuperAdmin) {
@@ -488,12 +634,7 @@ class AuthController extends Controller
             ]);
         }
 
-        if ($this->isSmtpConfigInvalid()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Email is not configured correctly. Update MAIL_USERNAME and MAIL_PASSWORD in .env and restart the app.',
-            ], 422);
-        }
+        // DISABLED for local testing: registration does not require working SMTP.
 
         // Determine name parts
         if (! isset($validated['first_name']) || ! isset($validated['last_name'])) {
@@ -515,7 +656,12 @@ class AuthController extends Controller
 
         // Determine creator and whether they're a super admin
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $isSuperAdmin = $creator && $creator->isSuperAdmin();
+        $isSuperAdmin = $creator && (
+            $creator->hasRole('Super Administrator') ||
+            $creator->hasRole('Super Admin') ||
+            $creator->hasRole('super administrator') ||
+            $creator->hasRole('superadmin')
+        );
 
         // Public self-registration is allowed, but authenticated non-super-admins may not create users.
         if ($creator && ! $isSuperAdmin) {
@@ -537,38 +683,30 @@ class AuthController extends Controller
                 'birth_date' => $validated['birthdate'] ?? null,
                 'profile_photo' => $profilePhotoPath,
             ]);
+            $user->forceFill(['email_verified_at' => now()])->save();
 
             // Role assignment rules:
             // - Only authenticated Super Administrators may create accounts with an elevated role.
             // - Otherwise default to the standard faculty role.
             $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-            $role = RoleSlug::FACULTY;
-            $isSuperAdmin = $creator && $creator->isSuperAdmin();
+            $role = 'faculty';
+            $isSuperAdmin = $creator && (
+                $creator->hasRole('Super Administrator') ||
+                    $creator->hasRole('Super Admin') ||
+                    $creator->hasRole('super administrator') ||
+                    $creator->hasRole('superadmin')
+            );
 
             if (! empty($validated['role']) && $isSuperAdmin) {
-                $role = RoleSlug::canonicalize($validated['role']) ?? RoleSlug::FACULTY;
+                $role = $validated['role'];
             }
 
-            $roleModel = Role::firstOrCreate(['name' => $role, 'guard_name' => 'web']);
+            $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
+            $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
             $user->assignRole($roleModel);
-            $this->assignDefaultPermissionsToRole($roleModel, $role);
-
-            if (RoleSlug::isInstitutionWide($role)) {
-                $user->forceFill([
-                    'college_id' => null,
-                    'program_id' => null,
-                    'team_id' => null,
-                ])->save();
-            }
-
-            // DISABLED: Email verification notification — temporarily off for dev, see [2026-08-18]
-            // Instead of sending verification email, auto-mark email as verified:
-            $user->markEmailAsVerified();
-            // try {
-            //     $user->sendEmailVerificationNotification();
-            // } catch (\Exception $e) {
-            //     ...
-            // }
+            
+            // Assign default permissions to the role if it's newly created
+            $this->assignDefaultPermissionsToRole($roleModel, $roleName);
 
             DB::commit();
         } catch (\Exception $e) {
@@ -579,8 +717,26 @@ class AuthController extends Controller
             throw $e;
         }
 
+        // Role assignment rules:
+        // - Only authenticated Super Administrators may create accounts with an elevated role.
+        // - Otherwise default to the standard faculty role.
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
-        $isSuperAdmin = $creator && $creator->isSuperAdmin();
+        $role = 'faculty';
+        $isSuperAdmin = $creator && (
+            $creator->hasRole('Super Administrator') ||
+                $creator->hasRole('Super Admin') ||
+                $creator->hasRole('super administrator') ||
+                $creator->hasRole('superadmin')
+        );
+
+        if (! empty($validated['role']) && $isSuperAdmin) {
+            $role = $validated['role'];
+        }
+
+        $roleName = trim(strtolower(str_replace(['_', '-'], ' ', $role)));
+        $roleModel = Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+        // Ensure permissions are assigned (in case role was just created)
+        $this->assignDefaultPermissionsToRole($roleModel, $roleName);
 
         $token = null;
         if ($creator && $isSuperAdmin) {
@@ -594,9 +750,7 @@ class AuthController extends Controller
 
         return response()->json([
             'success' => true,
-            // DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
-            // Changed from: 'message' => 'Registration successful. Please verify your email before signing in.'
-            'message' => 'Registration successful. Email verification skipped for development.',
+            'message' => 'Registration successful. You can sign in now.',
             'data' => $responseData,
         ], 201);
     }
@@ -721,17 +875,12 @@ class AuthController extends Controller
         // First try to resolve to a Team by code
         $code = strtoupper($validated['code']);
 
-        $team = \App\Models\Team::with('program')->where('code', $code)->first();
+        $team = \App\Models\Team::where('code', $code)->first();
 
         if ($team) {
-            $this->assertCanJoinProgram($user, (int) $team->program_id);
-
-            // Membership source of truth is users.program_id.
+            // Assign team and program to user
             $user->team_id = $team->id;
             $user->program_id = $team->program_id;
-            if (! $user->isDean()) {
-                $user->college_id = $team->program?->college_id;
-            }
             $user->save();
 
             return response()->json([
@@ -755,12 +904,7 @@ class AuthController extends Controller
         $program = \App\Models\Program::where('code', $code)->first();
 
         if ($program) {
-            $this->assertCanJoinProgram($user, (int) $program->id);
-
             $user->program_id = $program->id;
-            if (! $user->isDean()) {
-                $user->college_id = $program->college_id;
-            }
             $user->save();
 
             return response()->json([
@@ -783,23 +927,5 @@ class AuthController extends Controller
             'success' => false,
             'message' => 'Invalid invitation code. Please check with your Program Chair or Dean.',
         ], 404);
-    }
-
-    private function assertCanJoinProgram($user, int $programId): void
-    {
-        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor()) {
-            abort(403, 'Institution-wide roles are not assigned to a program via team code.');
-        }
-
-        if ($user->isDean()) {
-            abort(403, 'Deans are assigned to a college, not via team code.');
-        }
-
-        if ($user->isProgramChair()) {
-            $chairedId = $user->chairedProgramId();
-            if ($chairedId && $chairedId !== $programId) {
-                abort(422, 'You already chair a different program.');
-            }
-        }
     }
 }

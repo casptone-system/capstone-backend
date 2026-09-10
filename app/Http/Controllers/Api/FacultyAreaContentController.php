@@ -48,8 +48,6 @@ class FacultyAreaContentController extends Controller
         $areas = ActiveCycle::uniqueAreasPerProgram($areas);
 
         $progress = app(AreaProgressService::class);
-        $areas->each(fn (AccreditationArea $area) => $progress->refresh($area));
-
         $assignedProgram = $user->assignedProgram();
 
         return response()->json([

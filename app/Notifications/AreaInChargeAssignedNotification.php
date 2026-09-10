@@ -4,10 +4,11 @@ namespace App\Notifications;
 
 use App\Models\AccreditationArea;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class AreaInChargeAssignedNotification extends Notification
+class AreaInChargeAssignedNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 

@@ -1,5 +1,9 @@
 # Free Render blueprint. Paper allows Railway or Render for the Laravel API.
 # MySQL is not free on Render; set DB_* after you attach a free MySQL-compatible host.
+#
+# Queued mail needs a background worker (`php artisan queue:work --sleep=1 --tries=3 --timeout=90`).
+# Render's free plan typically cannot keep a second always-on worker. Prefer a Railway
+# worker service, or assignment/login emails will sit in the jobs table until one runs.
 services:
   - type: web
     name: adams-api
@@ -23,7 +27,7 @@ services:
       - key: SESSION_SECURE_COOKIE
         value: "true"
       - key: QUEUE_CONNECTION
-        value: sync
+        value: database
       - key: CACHE_STORE
         value: file
       - key: FILESYSTEM_DISK

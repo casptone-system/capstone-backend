@@ -1573,6 +1573,25 @@ class AreaParameterCatalog
         }
 
         $definitions = self::parameters()[$areaCode] ?? [];
+        if ($definitions === []) {
+            return;
+        }
+
+        $existing = AccreditationParameter::query()
+            ->where('area_id', $area->id)
+            ->get()
+            ->keyBy('code');
+
+        if ($existing->count() >= count($definitions)) {
+            $seededParameterIds = ParameterContentRow::query()
+                ->whereIn('parameter_id', $existing->pluck('id'))
+                ->distinct()
+                ->pluck('parameter_id');
+
+            if ($seededParameterIds->count() >= count($definitions)) {
+                return;
+            }
+        }
 
         foreach ($definitions as $index => $definition) {
             $parameter = AccreditationParameter::firstOrCreate(

@@ -13,6 +13,7 @@ use App\Models\AccreditationInstrument;
 use App\Models\AccreditationRequirement;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
+use App\Support\OrgScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -152,36 +153,19 @@ class AccreditationStructureController extends Controller
             abort(401);
         }
 
-        if ($user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor()) {
-            return;
-        }
-
-        if ($user->isDean()) {
-            $collegeId = $user->college_id;
-            abort_unless(
-                $collegeId && (int) $cycle->program()->value('college_id') === (int) $collegeId,
-                403,
-                'You are not authorized to view this accreditation structure.'
-            );
-
-            return;
-        }
-
-        if ($user->isProgramChair() && (int) $cycle->program()->value('chair_id') === (int) $user->id) {
-            return;
-        }
-
-        if ($user->isAreaIncharge() && $cycle->areas()->where('chair_id', $user->id)->exists()) {
-            return;
-        }
-
-        abort(403, 'You are not authorized to view this accreditation structure.');
+        abort_unless(
+            OrgScope::canViewCycle($user, $cycle),
+            403,
+            'You are not authorized to view this accreditation structure.'
+        );
     }
 
     private function assertProgramChairOwnsCycle(?User $user, AccreditationCycle $cycle): void
     {
-        if (! $user || ! $user->isProgramChair() || (int) $cycle->program?->chair_id !== (int) $user->id) {
-            abort(403, 'Only the assigned Program Chair may manage this accreditation structure.');
-        }
+        abort_unless(
+            $user && OrgScope::canManageCycle($user, $cycle),
+            403,
+            'Only the assigned Program Chair may manage this accreditation structure.'
+        );
     }
 }

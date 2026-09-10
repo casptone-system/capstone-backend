@@ -19,7 +19,7 @@ class ProgramResource extends JsonResource
     {
         $facultyUsers = User::where('program_id', $this->id)
             ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
-            ->get();
+            ->get(['id', 'first_name', 'middle_name', 'last_name', 'email', 'profile_photo', 'program_id']);
 
         $faculty = $facultyUsers->map(function (User $user): array {
             return [
@@ -31,18 +31,24 @@ class ProgramResource extends JsonResource
             ];
         })->values()->all();
 
-        $tasks = Task::whereHas('area.cycle', fn ($query) => $query->where('program_id', $this->id))->get();
-        $totalTasks = $tasks->count();
-        $completedTasks = $tasks->where('status', 'Completed')->count();
-        $inProgressTasks = $tasks->filter(fn ($task) => in_array($task->status, ['Not Started', 'In Progress'], true))->count();
-        $overdueTasks = $tasks->filter(fn ($task) => $task->due_date && $task->due_date->isPast() && $task->status !== 'Completed')->count();
+        $taskQuery = Task::query()->where(function ($query) {
+            $query->where('program_id', $this->id)
+                ->orWhereHas('area.cycle', fn ($cycle) => $cycle->where('program_id', $this->id));
+        });
+        $totalTasks = (clone $taskQuery)->count();
+        $completedTasks = (clone $taskQuery)->where('status', 'Completed')->count();
+        $inProgressTasks = (clone $taskQuery)->whereIn('status', ['Not Started', 'In Progress'])->count();
+        $overdueTasks = (clone $taskQuery)
+            ->where('due_date', '<', now())
+            ->where('status', '!=', 'Completed')
+            ->count();
         $completionRate = $totalTasks > 0 ? (int) round(($completedTasks / $totalTasks) * 100) : 0;
 
-        $documents = Document::where('program_id', $this->id)->get();
-        $totalDocuments = $documents->count();
-        $draftDocuments = $documents->where('status', 'Draft')->count();
-        $pendingReviewDocuments = $documents->whereIn('status', ['Draft', 'Revision Requested'])->count();
-        $activeDocuments = $documents->where('status', 'Active')->count();
+        $documentQuery = Document::query()->where('program_id', $this->id);
+        $totalDocuments = (clone $documentQuery)->count();
+        $draftDocuments = (clone $documentQuery)->where('status', 'Draft')->count();
+        $pendingReviewDocuments = (clone $documentQuery)->whereIn('status', ['Draft', 'Revision Requested'])->count();
+        $activeDocuments = (clone $documentQuery)->where('status', 'Active')->count();
 
         return [
             'id' => $this->id,

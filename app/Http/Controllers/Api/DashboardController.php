@@ -25,47 +25,20 @@ class DashboardController extends Controller
 
         if ($requestedProgramId) {
             abort_unless(OrgScope::canSeeProgram($user, $requestedProgramId), 403, 'You are not allowed to view this program.');
-            $programId = $requestedProgramId;
             $programIds = [$requestedProgramId];
-        } elseif ($visibleIds === null) {
-            $programId = null;
-            $programIds = null;
         } else {
-            $programId = count($visibleIds) === 1 ? $visibleIds[0] : null;
             $programIds = $visibleIds;
         }
 
-        $constrainByPrograms = function ($query, string $column = 'id') use ($programId, $programIds) {
-            if ($programId) {
-                return $query->where($column, $programId);
-            }
-            if ($programIds !== null) {
-                if ($programIds === []) {
-                    return $query->whereRaw('0 = 1');
-                }
-
-                return $query->whereIn($column, $programIds);
-            }
-
-            return $query;
-        };
+        $constrainByPrograms = fn ($query, string $column = 'id') => OrgScope::whereProgramIds($query, $programIds, $column);
 
         // --- Total Programs ---
         $totalProgramsQuery = Program::query();
         $totalProgramsQuery = $constrainByPrograms($totalProgramsQuery, 'id');
         $totalPrograms = $totalProgramsQuery->count();
 
-        $visibleProgramIds = $programId ? [$programId] : $programIds;
-        $limitToPrograms = function ($query, string $column = 'program_id') use ($visibleProgramIds) {
-            if ($visibleProgramIds === null) {
-                return $query;
-            }
-            if ($visibleProgramIds === []) {
-                return $query->whereRaw('0 = 1');
-            }
-
-            return $query->whereIn($column, $visibleProgramIds);
-        };
+        $visibleProgramIds = $programIds;
+        $limitToPrograms = fn ($query, string $column = 'program_id') => OrgScope::whereProgramIds($query, $visibleProgramIds, $column);
 
         // --- Total Areas ---
         $totalAreasQuery = AccreditationArea::query();
@@ -150,8 +123,10 @@ class DashboardController extends Controller
             ->toArray();
 
         // --- Per-Program Breakdown (only when no single-program filter) ---
+        $singleProgramId = $requestedProgramId
+            ?: (is_array($programIds) && count($programIds) === 1 ? $programIds[0] : null);
         $programBreakdown = null;
-        if (! $programId) {
+        if (! $singleProgramId) {
             $programsQuery = Program::withCount([
                 'accreditationCycles as cycles_count',
                 'accreditationCycles as ready_cycles_count' => function ($q) {

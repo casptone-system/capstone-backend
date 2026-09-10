@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AccreditationCycle;
 use App\Models\Program;
 use App\Models\User;
+use App\Support\OrgScope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
@@ -79,7 +80,7 @@ class AccreditationLevelStatusService
 
         return match ($view) {
             'superadmin', 'vpaa', 'qa' => $query,
-            'dean' => $query->where('college_id', $user->college_id ?: 0),
+            'dean' => OrgScope::constrainPrograms($query, $user),
             'program-chair' => $this->scopeToProgramChair($query, $user),
             'area-incharge' => $this->scopeToAssignedAreas($query, $user),
             default => $this->scopeToFacultyProgram($query, $user),

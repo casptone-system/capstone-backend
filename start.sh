@@ -9,4 +9,6 @@ export MYSQL_ATTR_SSL_CA="${MYSQL_ATTR_SSL_CA:-/etc/ssl/certs/ca-certificates.cr
 
 php artisan migrate --force --no-interaction
 
+# Queue workers belong in a separate process/service:
+# php artisan queue:work --sleep=1 --tries=3 --timeout=90
 exec php artisan serve --host=0.0.0.0 --port="${PORT:-8080}"

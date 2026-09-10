@@ -123,6 +123,11 @@ class Task extends Model
         return $this->belongsTo(AccreditationRequirement::class, 'requirement_id');
     }
 
+    public function documents(): HasMany
+    {
+        return $this->hasMany(Document::class, 'task_id');
+    }
+
     /**
      * Get the user who assigned this task.
      */

@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
+use App\Models\AccreditationParameter;
 use App\Models\InstrumentTemplate;
+use App\Models\ParameterContentRow;
 use App\Models\Program;
 use App\Support\AreaParameterCatalog;
 
@@ -62,18 +64,50 @@ class AaccupStructureService
 
     public function seedCycleAreas(AccreditationCycle $cycle): void
     {
-        foreach (AccreditationArea::AACCUP_AREAS as $areaDef) {
-            $area = AccreditationArea::query()->firstOrCreate(
-                [
-                    'cycle_id' => $cycle->id,
-                    'code' => $areaDef['code'],
-                ],
-                [
-                    'name' => $areaDef['name'],
-                    'status' => 'Not Started',
-                ]
-            );
+        $expected = collect(AccreditationArea::AACCUP_AREAS);
+        $existing = AccreditationArea::query()
+            ->where('cycle_id', $cycle->id)
+            ->get()
+            ->keyBy('code');
 
+        foreach ($expected as $areaDef) {
+            if ($existing->has($areaDef['code'])) {
+                continue;
+            }
+
+            $area = AccreditationArea::query()->create([
+                'cycle_id' => $cycle->id,
+                'code' => $areaDef['code'],
+                'name' => $areaDef['name'],
+                'status' => 'Not Started',
+            ]);
+            $existing->put($areaDef['code'], $area);
+        }
+
+        $areas = $expected
+            ->map(fn (array $areaDef) => $existing->get($areaDef['code']))
+            ->filter();
+        $areaIds = $areas->pluck('id')->filter()->all();
+        $expectedParamCount = $expected->sum(
+            fn (array $areaDef) => count(AreaParameterCatalog::parameters()[$areaDef['code']] ?? [])
+        );
+        $parameterIds = $areaIds === []
+            ? collect()
+            : AccreditationParameter::query()->whereIn('area_id', $areaIds)->pluck('id');
+        $actualParamCount = $parameterIds->count();
+        $seededRowCount = $parameterIds->isEmpty()
+            ? 0
+            : ParameterContentRow::query()->whereIn('parameter_id', $parameterIds)->distinct()->count('parameter_id');
+
+        if (
+            $expectedParamCount > 0
+            && $actualParamCount >= $expectedParamCount
+            && $seededRowCount >= $expectedParamCount
+        ) {
+            return;
+        }
+
+        foreach ($areas as $area) {
             AreaParameterCatalog::ensureSeeded($area);
         }
     }
@@ -130,11 +164,22 @@ class AaccupStructureService
     public function ensureOpenLevels(Program $program): void
     {
         $current = AccreditationCycle::currentLevelFor($program);
+        $program->loadMissing('accreditationCycles');
 
         foreach (AccreditationCycle::LEVELS as $level) {
-            if (AccreditationCycle::rank($level) >= AccreditationCycle::rank($current)) {
-                $this->ensureCycle($program, $level);
+            if (AccreditationCycle::rank($level) < AccreditationCycle::rank($current)) {
+                continue;
             }
+
+            $cycle = $program->accreditationCycles->firstWhere('level', $level);
+            if ($cycle) {
+                $this->seedCycleAreas($cycle);
+                continue;
+            }
+
+            $this->ensureCycle($program, $level);
+            $program->unsetRelation('accreditationCycles');
+            $program->load('accreditationCycles');
         }
     }
 

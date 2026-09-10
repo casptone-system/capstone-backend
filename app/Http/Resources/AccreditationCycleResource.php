@@ -54,7 +54,34 @@ class AccreditationCycleResource extends JsonResource
             'updated_at' => $this->updated_at?->toDateTimeString(),
             'createdAt' => $this->created_at?->toDateTimeString(),
             'updatedAt' => $this->updated_at?->toDateTimeString(),
-            'program' => $this->whenLoaded('program', fn () => new ProgramResource($this->program)),
+            'program' => $this->whenLoaded('program', function () {
+                $program = $this->program;
+
+                return [
+                    'id' => $program->id,
+                    'name' => $program->name,
+                    'code' => $program->code,
+                    'chair' => $program->relationLoaded('chairUser')
+                        ? $program->chairUser?->name
+                        : $program->chair,
+                    'chair_name' => $program->relationLoaded('chairUser')
+                        ? $program->chairUser?->name
+                        : $program->chair,
+                    'chairId' => $program->chair_id,
+                    'collegeId' => $program->college_id,
+                    'activeCycleId' => $program->active_cycle_id,
+                    'accreditationStatus' => $program->accreditation_status,
+                    'complianceScore' => $program->compliance_score,
+                    'college' => $this->when(
+                        $program->relationLoaded('college') && $program->college,
+                        fn () => [
+                            'id' => $program->college->id,
+                            'name' => $program->college->name,
+                            'code' => $program->college->code,
+                        ]
+                    ),
+                ];
+            }),
             'instrument' => $this->whenLoaded('instrument', fn () => new AccreditationInstrumentResource($this->instrument)),
         ];
     }

@@ -15,12 +15,12 @@ use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
-// DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
+// DISABLED: Email verification ΓÇö temporarily off for dev, see [2026-08-18]
 // class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVerifyEmail
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    // DISABLED: Email verification — temporarily off for dev, see [2026-08-18]
+    // DISABLED: Email verification ΓÇö temporarily off for dev, see [2026-08-18]
     // Changed from: use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes, MustVerifyEmail;
     use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes;
 
@@ -234,7 +234,7 @@ class User extends Authenticatable
     }
 
     /**
-     * College for Deans is users.college_id only — never inferred from program/team.
+     * College for Deans is users.college_id only ΓÇö never inferred from program/team.
      * Other roles may still expose college_id when it is actually stored.
      */
     public function getEffectiveCollegeId(): ?int
@@ -298,11 +298,23 @@ class User extends Authenticatable
         return asset('storage/' . ltrim($this->profile_photo, '/'));
     }
 
-    // DISABLED: Email verification notification — temporarily off for dev, see [2026-08-18]
-    // public function sendEmailVerificationNotification(): void
-    // {
-    //     $this->notify(new VerifyApiEmailNotification());
-    // }
+    // DISABLED for local testing: treat every account as verified.
+    public function hasVerifiedEmail(): bool
+    {
+        return true;
+    }
+
+    public function markEmailAsVerified(): bool
+    {
+        return $this->forceFill([
+            'email_verified_at' => $this->email_verified_at ?? now(),
+        ])->save();
+    }
+
+    public function sendEmailVerificationNotification(): void
+    {
+        // Skipped while email verification is disabled for testing.
+    }
 
     public function sendPasswordResetNotification($token): void
     {

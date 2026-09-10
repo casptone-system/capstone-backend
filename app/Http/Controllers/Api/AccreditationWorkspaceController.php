@@ -10,9 +10,10 @@ use App\Models\AccreditationWorkspace;
 use App\Models\AreaMember;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
-use App\Support\AreaAssignmentNotifier;
 use App\Services\AccreditationWorkspaceService;
 use App\Services\EvidenceStorage;
+use App\Support\AreaAssignmentNotifier;
+use App\Support\OrgScope;
 use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -28,18 +29,20 @@ class AccreditationWorkspaceController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $query = AccreditationWorkspace::with(['program', 'cycle'])->latest();
-
-        if ($user->isProgramChair()) {
-            $query->where('program_id', $user->assignedProgramId() ?: 0);
-        } elseif ($user->isDean()) {
-            $collegeId = $user->college_id;
-            $query->whereHas('program', fn ($program) => $program->where('college_id', $collegeId ?: 0));
-        } elseif ($user->isFaculty() || $user->isAreaIncharge()) {
-            $query->where('program_id', $user->getEffectiveProgramId() ?: 0);
-        } elseif (! $user->isVPAA() && ! $user->isQA() && ! $user->isSuperAdmin()) {
+        if (
+            ! $user->isVPAA()
+            && ! $user->isQA()
+            && ! $user->isSuperAdmin()
+            && ! $user->isDean()
+            && ! $user->isProgramChair()
+            && ! $user->isFaculty()
+            && ! $user->isAreaIncharge()
+        ) {
             abort(403);
         }
+
+        $query = AccreditationWorkspace::with(['program', 'cycle'])->latest();
+        OrgScope::constrainPrograms($query, $user);
 
         $items = $query->get()
             ->map(fn (AccreditationWorkspace $workspace) => $this->workspaces->serializeWorkspace($workspace, $user))

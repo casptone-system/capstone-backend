@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\AccreditationArea;
+use App\Models\AccreditationCycle;
 use App\Models\Program;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -76,23 +77,21 @@ final class OrgScope
 
     public static function constrainPrograms(Builder $query, User $user): Builder
     {
-        $ids = self::visibleProgramIds($user);
+        $column = $query->getModel()->getTable() === 'programs' ? 'id' : 'program_id';
 
-        if ($ids === null) {
-            return $query;
-        }
-
-        if ($ids === []) {
-            return $query->whereRaw('0 = 1');
-        }
-
-        return $query->whereIn($query->getModel()->getTable() === 'programs' ? 'id' : 'program_id', $ids);
+        return self::whereProgramIds($query, self::visibleProgramIds($user), $column);
     }
 
     public static function constrainCycles(Builder $query, User $user): Builder
     {
-        $ids = self::visibleProgramIds($user);
+        return self::whereProgramIds($query, self::visibleProgramIds($user), 'program_id');
+    }
 
+    /**
+     * @param  list<int>|null  $ids  Null means no constraint (institution-wide).
+     */
+    public static function whereProgramIds(Builder $query, ?array $ids, string $column = 'program_id'): Builder
+    {
         if ($ids === null) {
             return $query;
         }
@@ -101,6 +100,32 @@ final class OrgScope
             return $query->whereRaw('0 = 1');
         }
 
-        return $query->whereIn('program_id', $ids);
+        return $query->whereIn($column, $ids);
+    }
+
+    public static function canViewCycle(User $user, AccreditationCycle $cycle): bool
+    {
+        if ($user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor()) {
+            return true;
+        }
+
+        if ($user->isDean()) {
+            $collegeId = $user->college_id;
+
+            return (bool) $collegeId && (int) $cycle->program()->value('college_id') === (int) $collegeId;
+        }
+
+        if ($user->isProgramChair() && (int) $cycle->program()->value('chair_id') === (int) $user->id) {
+            return true;
+        }
+
+        return $user->isAreaIncharge() && $cycle->areas()->where('chair_id', $user->id)->exists();
+    }
+
+    public static function canManageCycle(User $user, AccreditationCycle $cycle): bool
+    {
+        $programChairId = $cycle->program()->value('chair_id') ?? $cycle->program?->chair_id;
+
+        return $user->isProgramChair() && (int) $programChairId === (int) $user->id;
     }
 }

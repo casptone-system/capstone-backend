@@ -3,70 +3,18 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\College;
 use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
-use App\Models\Task;
-use App\Models\Team;
 use App\Models\User;
-use App\Services\AreaProgressService;
+use App\Services\DeanDashboardService;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class DeanController extends Controller
 {
-    protected function resolveDeanCollege(User $user, ?int $requestedCollegeId = null): ?College
+    public function __construct(private DeanDashboardService $deanDashboard)
     {
-        $collegeId = $user->college_id;
-        if (! $collegeId) {
-            return null;
-        }
-
-        if ($requestedCollegeId && (int) $requestedCollegeId !== (int) $collegeId) {
-            return null;
-        }
-
-        return College::find($collegeId);
-    }
-
-    protected function buildProgramRequirementAnalytics(Program $program): array
-    {
-        $tasks = Task::with(['area', 'assignments'])
-            ->whereHas('area.cycle', fn ($query) => $query->where('program_id', $program->id))
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        $totalTasks = $tasks->count();
-        $completedTasks = $tasks->filter(fn ($task) => $task->status === 'Completed')->count();
-        $inProgressTasks = $tasks->filter(fn ($task) => in_array($task->status, ['In Progress', 'Not Started'], true))->count();
-        $overdueTasks = $tasks->filter(fn ($task) => $task->due_date && $task->due_date->isPast() && $task->status !== 'Completed')->count();
-        $completionRate = $totalTasks > 0 ? (int) round(($completedTasks / $totalTasks) * 100) : 0;
-
-        $requirements = $tasks->map(function (Task $task) {
-            $documentCount = Document::where('task_id', $task->id)->count();
-            $isOverdue = (bool) ($task->due_date && $task->due_date->isPast() && $task->status !== 'Completed');
-
-            return [
-                'id' => $task->id,
-                'title' => $task->title,
-                'status' => $task->status,
-                'priority' => $task->priority,
-                'area' => $task->area?->name,
-                'documentCount' => $documentCount,
-                'dueDate' => $task->due_date?->toDateString(),
-                'isOverdue' => $isOverdue,
-            ];
-        })->values()->all();
-
-        return [
-            'totalTasks' => $totalTasks,
-            'completedTasks' => $completedTasks,
-            'inProgressTasks' => $inProgressTasks,
-            'overdueTasks' => $overdueTasks,
-            'completionRate' => $completionRate,
-            'requirements' => $requirements,
-        ];
     }
 
     public function dashboard(Request $request)
@@ -81,128 +29,16 @@ class DeanController extends Controller
             return response()->json(['success' => false, 'message' => 'Dean is not assigned to a valid college.'], 403);
         }
 
-        $collegeId = $request->query('college_id');
-        $college = $this->resolveDeanCollege($user, $collegeId ? (int) $collegeId : null);
-
-        if ($collegeId && ! $college) {
+        try {
+            $data = $this->deanDashboard->dashboard(
+                $user,
+                $request->query('college_id') ? (int) $request->query('college_id') : null
+            );
+        } catch (ModelNotFoundException) {
             return response()->json(['success' => false, 'message' => 'College not found.'], 404);
         }
 
-        if (! $college) {
-            return response()->json(['success' => true, 'data' => [
-                'stats' => [],
-                'programs' => [],
-                'pendingDocuments' => [],
-            ]]);
-        }
-
-        $programs = Program::where('college_id', $college->id)
-            ->with(['college', 'chairUser', 'accreditationCycles', 'activeCycle'])
-            ->get();
-
-        $programIds = $programs->pluck('id');
-
-        $facultyByProgram = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
-            ->select(['id', 'first_name', 'middle_name', 'last_name', 'email', 'program_id'])
-            ->get()
-            ->groupBy('program_id');
-
-        $documents = Document::whereIn('program_id', $programIds)
-            ->with(['program', 'uploader'])
-            ->orderByDesc('created_at')
-            ->limit(10)
-            ->get();
-
-        $activeProgramChairCount = Program::where('college_id', $college->id)
-            ->whereNotNull('chair_id')
-            ->distinct('chair_id')
-            ->count('chair_id');
-
-        $facultyCount = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
-            ->count();
-
-        $activeFacultyCount = User::whereIn('program_id', $programIds)
-            ->whereHas('roles', fn ($query) => $query->where('name', \App\Support\RoleSlug::FACULTY))
-            ->whereNotNull('email_verified_at')
-            ->count();
-
-        $avgCompliance = $programs->avg('compliance_score') ?? 0;
-        $pendingDocuments = $documents->filter(fn ($document) => $document->status !== 'Archived')->count();
-        $atRiskPrograms = $programs->filter(fn ($program) => (int) $program->compliance_score < 70)->count();
-
-        return response()->json(['success' => true, 'data' => [
-            'dean' => [
-                'id' => $user->id,
-                'name' => trim(sprintf('%s %s %s', $user->first_name, $user->middle_name ?? '', $user->last_name)),
-                'first_name' => $user->first_name,
-                'last_name' => $user->last_name,
-                'position' => 'Dean',
-                'role' => 'Dean',
-                'department' => $college->name,
-            ],
-            'college' => [
-                'id' => $college->id,
-                'name' => $college->name,
-            ],
-            'stats' => [
-                ['label' => 'Programs', 'value' => (string) $programs->count(), 'type' => 'programs'],
-                ['label' => 'Overall Compliance', 'value' => round($avgCompliance, 1) . '%', 'type' => 'compliance'],
-                ['label' => 'Pending Reviews', 'value' => (string) $pendingDocuments, 'type' => 'pending'],
-                ['label' => 'At-Risk Programs', 'value' => (string) $atRiskPrograms, 'type' => 'risk'],
-                ['label' => 'Faculty Participation', 'value' => $facultyCount ? round(($activeFacultyCount / $facultyCount) * 100, 1) . '%' : '0%', 'type' => 'faculty'],
-                ['label' => 'Active Program Chairs', 'value' => (string) $activeProgramChairCount, 'type' => 'chairs'],
-            ],
-            'programs' => $programs->map(function ($program) use ($facultyByProgram) {
-                $faculty = $facultyByProgram->get($program->id, collect())->map(function ($user) {
-                    return [
-                        'id' => $user->id,
-                        'name' => trim(sprintf('%s %s %s', $user->first_name, $user->middle_name ?? '', $user->last_name)),
-                        'email' => $user->email,
-                    ];
-                })->values()->all();
-
-                $analytics = $this->buildProgramRequirementAnalytics($program);
-                
-                // Get the latest accreditation cycle and extract its level
-                $currentCycle = \App\Support\ActiveCycle::forProgram($program);
-                $accreditationLevel = $currentCycle?->level ?? 'Not Set';
-
-                return [
-                    'id' => $program->id,
-                    'name' => $program->name,
-                    'code' => $program->code,
-                    'chair' => $program->chairUser?->name,
-                    'needsChairAssigned' => $program->needs_chair_assigned,
-                    'faculty' => $faculty,
-                    'facultyCount' => count($faculty),
-                    'accreditationStatus' => $program->accreditation_status,
-                    'accreditationLevel' => $accreditationLevel,
-                    'complianceScore' => (int) $program->compliance_score,
-                    'documentCount' => Document::where('program_id', $program->id)->count(),
-                    'requirementProgress' => [
-                        'totalTasks' => $analytics['totalTasks'],
-                        'completedTasks' => $analytics['completedTasks'],
-                        'inProgressTasks' => $analytics['inProgressTasks'],
-                        'overdueTasks' => $analytics['overdueTasks'],
-                        'completionRate' => $analytics['completionRate'],
-                    ],
-                    'areaProgress' => app(AreaProgressService::class)->breakdownForProgram($program),
-                    'requirements' => $analytics['requirements'],
-                ];
-            })->values(),
-            'pendingDocuments' => $documents->map(function ($document) {
-                return [
-                    'id' => $document->id,
-                    'title' => $document->title,
-                    'program' => $document->program?->name,
-                    'submittedBy' => $document->uploader?->name,
-                    'status' => $document->status,
-                    'submittedAt' => $document->created_at?->toIso8601String(),
-                ];
-            })->values(),
-        ]]);
+        return response()->json(['success' => true, 'data' => $data]);
     }
 
     public function programs(Request $request)
@@ -213,11 +49,11 @@ class DeanController extends Controller
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
-        if (! $user->can('monitor-college', $this->resolveDeanCollege($user))) {
+        if (! $user->can('monitor-college', $this->deanDashboard->resolveCollege($user))) {
             return response()->json(['success' => false, 'message' => 'Dean is not permitted to access this college.'], 403);
         }
 
-        $college = $this->resolveDeanCollege($user);
+        $college = $this->deanDashboard->resolveCollege($user);
         if (! $college) {
             return response()->json(['success' => true, 'data' => []]);
         }
@@ -233,7 +69,7 @@ class DeanController extends Controller
         $programs = $query->paginate($request->get('per_page', 15));
 
         $programs->getCollection()->transform(function (Program $program) {
-            $analytics = $this->buildProgramRequirementAnalytics($program);
+            $analytics = $this->deanDashboard->requirementAnalytics($program);
 
             return [
                 'id' => $program->id,
@@ -252,7 +88,7 @@ class DeanController extends Controller
                     'overdueTasks' => $analytics['overdueTasks'],
                     'completionRate' => $analytics['completionRate'],
                 ],
-                'areaProgress' => app(AreaProgressService::class)->breakdownForProgram($program),
+                'areaProgress' => $this->deanDashboard->areaProgress($program),
                 'requirements' => $analytics['requirements'],
                 'created_at' => $program->created_at,
                 'updated_at' => $program->updated_at,
@@ -274,7 +110,7 @@ class DeanController extends Controller
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
-        $college = $this->resolveDeanCollege($user, $request->query('college_id') ? (int) $request->query('college_id') : null);
+        $college = $this->deanDashboard->resolveCollege($user, $request->query('college_id') ? (int) $request->query('college_id') : null);
         if (! $college) {
             return response()->json(['success' => true, 'data' => ['data' => []]]);
         }
@@ -327,7 +163,7 @@ class DeanController extends Controller
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
-        $college = $this->resolveDeanCollege($user);
+        $college = $this->deanDashboard->resolveCollege($user);
         if (! $college) {
             return response()->json(['success' => true, 'data' => []]);
         }
@@ -397,7 +233,7 @@ class DeanController extends Controller
         }
 
         // Verify college access
-        $college = $this->resolveDeanCollege($user);
+        $college = $this->deanDashboard->resolveCollege($user);
         if (! $college || ($programChair->college_id && (int) $programChair->college_id !== (int) $college->id)) {
             return response()->json(['success' => false, 'message' => 'Program Chair not in your college.'], 403);
         }
@@ -473,7 +309,7 @@ class DeanController extends Controller
             return response()->json(['success' => false, 'message' => 'Forbidden.'], 403);
         }
 
-        $college = $this->resolveDeanCollege($user);
+        $college = $this->deanDashboard->resolveCollege($user);
         if (! $college) {
             return response()->json(['success' => false, 'message' => 'Unable to determine your college.'], 403);
         }

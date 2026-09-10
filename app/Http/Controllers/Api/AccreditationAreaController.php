@@ -13,26 +13,28 @@ use App\Models\AreaMember;
 use App\Models\CriterionEvidence;
 use App\Models\Document;
 use App\Models\Program;
-use App\Services\AaccupStructureService;
 use App\Models\Review;
 use App\Models\User;
-use App\Notifications\AreaInChargeAssignedNotification;
-use App\Support\AreaAssignmentNotifier;
-use App\Support\AreaDocumentRules;
-use App\Support\OrgScope;
-use App\Support\RoleGate;
-use App\Support\RoleSlug;
-use App\Support\AreaEvidenceGate;
+use App\Services\AaccupStructureService;
+use App\Services\AreaAssignmentService;
 use App\Services\AreaDeadlineReminderService;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
+use App\Support\AreaAssignmentNotifier;
+use App\Support\AreaDocumentRules;
+use App\Support\AreaEvidenceGate;
+use App\Support\OrgScope;
+use App\Support\RoleGate;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 use Illuminate\Support\Facades\DB;
 
 class AccreditationAreaController extends Controller
 {
-    public function __construct(private EvidenceStorage $evidenceStorage)
-    {
+    public function __construct(
+        private EvidenceStorage $evidenceStorage,
+        private AreaAssignmentService $assignments,
+    ) {
     }
     /**
      * Display a paginated list of accreditation areas for a cycle.
@@ -156,50 +158,31 @@ class AccreditationAreaController extends Controller
             'confirm_reassign' => ['sometimes', 'boolean'],
         ]);
 
-        $accreditationArea->load('chair');
-        $newChairId = (int) $validated['chair_id'];
-        $currentChairId = $accreditationArea->chair_id ? (int) $accreditationArea->chair_id : null;
+        try {
+            $result = $this->assignments->assignChair(
+                $accreditationArea,
+                (int) $validated['chair_id'],
+                $request->boolean('confirm_reassign')
+            );
+        } catch (InvalidArgumentException $exception) {
+            abort(422, $exception->getMessage());
+        }
 
-        if ($currentChairId && $currentChairId !== $newChairId && ! $request->boolean('confirm_reassign')) {
+        if (! $result['assigned']) {
             return response()->json([
                 'success' => false,
                 'message' => 'This area already has an Area In-Charge. Confirm to reassign.',
                 'data' => [
                     'requiresConfirmation' => true,
-                    'currentChair' => $accreditationArea->chair ? [
-                        'id' => $accreditationArea->chair->id,
-                        'name' => $accreditationArea->chair->name,
-                        'email' => $accreditationArea->chair->email,
-                    ] : null,
+                    'currentChair' => $result['currentChair'],
                 ],
             ], 409);
         }
 
-        $assignee = User::findOrFail($newChairId);
-        $programId = (int) $accreditationArea->cycle()->value('program_id');
-        if (! $assignee->belongsToProgram($programId) && ! $assignee->ownsAssignedProgram($programId)) {
-            abort(422, 'The selected user does not belong to this program.');
-        }
-
-        $accreditationArea->members()->where('user_id', $newChairId)->delete();
-        $accreditationArea->update(['chair_id' => $newChairId]);
-
-        if (! $assignee->isAreaIncharge()) {
-            $assignee->assignRole(RoleSlug::AREA_IN_CHARGE);
-        }
-
-        if ($currentChairId !== $newChairId) {
-            $assignee->notify(new AreaInChargeAssignedNotification(
-                $accreditationArea->fresh(['cycle.program'])
-            ));
-        }
-
-        app(AreaProgressService::class)->refresh($accreditationArea->fresh());
-
         return response()->json([
             'success' => true,
             'message' => 'Area Chair assigned successfully.',
-            'data' => new AccreditationAreaResource($accreditationArea->load('chair', 'members.user')),
+            'data' => new AccreditationAreaResource($result['area']),
         ], 200);
     }
 
@@ -243,9 +226,10 @@ class AccreditationAreaController extends Controller
         }
 
         $candidate = User::findOrFail($resolvedUserId);
-        $programId = (int) $accreditationArea->cycle()->value('program_id');
-        if (! $candidate->belongsToProgram($programId) && ! $candidate->ownsAssignedProgram($programId)) {
-            abort(422, 'The selected user does not belong to this program.');
+        try {
+            $this->assignments->assertBelongsToAreaProgram($candidate, $accreditationArea);
+        } catch (InvalidArgumentException $exception) {
+            abort(422, $exception->getMessage());
         }
 
         $member = $accreditationArea->members()->create([
@@ -1021,35 +1005,20 @@ class AccreditationAreaController extends Controller
 
     private function assertCanViewCycle($user, AccreditationCycle $cycle): void
     {
-        if (! $user || $user->isVPAA() || $user->isQA() || $user->isSuperAdmin() || $user->isAccreditor() || $user->isDean()) {
-            if ($user && $user->isDean()) {
-                $collegeId = $user->college_id;
-                abort_unless(
-                    $collegeId && (int) $cycle->program()->value('college_id') === (int) $collegeId,
-                    403,
-                    'You are not authorized to view this accreditation area.'
-                );
-            }
-
-            return;
-        }
-
-        if ($user->isProgramChair() && (int) $cycle->program()->value('chair_id') === (int) $user->id) {
-            return;
-        }
-
-        if ($user->isAreaIncharge() && $cycle->areas()->where('chair_id', $user->id)->exists()) {
-            return;
-        }
-
-        abort(403, 'You are not authorized to view this accreditation area.');
+        abort_unless(
+            $user && OrgScope::canViewCycle($user, $cycle),
+            403,
+            'You are not authorized to view this accreditation area.'
+        );
     }
 
     private function assertCanManageCycle($user, AccreditationCycle $cycle): void
     {
-        if (! $user || ! $user->isProgramChair() || (int) $cycle->program()->value('chair_id') !== (int) $user->id) {
-            abort(403, 'Only the assigned Program Chair may manage this accreditation area.');
-        }
+        abort_unless(
+            $user && OrgScope::canManageCycle($user, $cycle),
+            403,
+            'Only the assigned Program Chair may manage this accreditation area.'
+        );
     }
 
     private function assertCycleIsOpenForAssignment($user, AccreditationCycle $cycle): void

@@ -87,6 +87,24 @@ class AreaProgressService
             ->reject(fn (ParameterContentRow $row) => $row->isSectionHeading())
             ->pluck('id');
 
+        return $this->countsForRowIds($rowIds);
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, int>  $rowIds
+     * @return array{total: int, completed: int, inProgress: int, pending: int, notStarted: int}
+     */
+    private function countsForRowIds($rowIds): array
+    {
+        $empty = [
+            'total' => 0,
+            'completed' => 0,
+            'inProgress' => 0,
+            'pending' => 0,
+            'notStarted' => 0,
+        ];
+
+        $rowIds = collect($rowIds)->filter()->values();
         $total = $rowIds->count();
 
         if ($total === 0) {
@@ -148,21 +166,17 @@ class AreaProgressService
     public function workloadForAreas($areas): array
     {
         $areas = collect($areas);
-        $totals = [
-            'total' => 0,
-            'completed' => 0,
-            'inProgress' => 0,
-            'pending' => 0,
-            'notStarted' => 0,
-        ];
+        $areaIds = $areas->pluck('id')->filter()->values();
 
-        foreach ($areas as $area) {
-            $counts = $this->countsForArea($area);
-            foreach ($totals as $key => $value) {
-                $totals[$key] = $value + $counts[$key];
-            }
-        }
+        $rowIds = $areaIds->isEmpty()
+            ? collect()
+            : ParameterContentRow::query()
+                ->whereHas('parameter', fn ($query) => $query->whereIn('area_id', $areaIds))
+                ->get()
+                ->reject(fn (ParameterContentRow $row) => $row->isSectionHeading())
+                ->pluck('id');
 
+        $totals = $this->countsForRowIds($rowIds);
         $progressPercent = $totals['total'] === 0
             ? 0
             : (int) round(($totals['completed'] / $totals['total']) * 100);
