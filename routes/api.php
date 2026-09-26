@@ -4,18 +4,21 @@ use App\Http\Controllers\Api\AccreditationAreaController;
 use App\Http\Controllers\Api\AccreditationCycleController;
 use App\Http\Controllers\Api\AccreditationStructureController;
 use App\Http\Controllers\Api\AccreditationWorkspaceController;
-use App\Http\Controllers\Api\InstrumentTemplateController;
+use App\Http\Controllers\Api\AuditController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\CollegeController;
-use App\Http\Controllers\Api\ProgramActiveLevelController;
-use App\Http\Controllers\Api\ProgramController;
-use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\DesignationFileController;
 use App\Http\Controllers\Api\DeanController;
+use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\FacultyAreaContentController;
 use App\Http\Controllers\Api\FacultyTaskController;
+use App\Http\Controllers\Api\InstrumentTemplateController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\ParameterRowCommentController;
+use App\Http\Controllers\Api\ProgramActiveLevelController;
+use App\Http\Controllers\Api\ProgramController;
 use App\Http\Controllers\Api\QAController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
@@ -23,6 +26,7 @@ use App\Http\Controllers\Api\RoleStorageController;
 use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskNotificationController;
+use App\Http\Controllers\Api\TeamController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -43,6 +47,8 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::get('users/me/areas', [FacultyAreaContentController::class, 'myAreas']);
+    Route::get('designation-files', [DesignationFileController::class, 'index']);
+    Route::get('designation-files/{designationFile}/download', [DesignationFileController::class, 'download']);
     Route::post('/me/profile-photo', [AuthController::class, 'updateProfilePhoto']);
 
     // Colleges (GET /colleges, POST /colleges + full CRUD)
@@ -55,6 +61,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::delete('programs/{program}/members/{user}', [ProgramController::class, 'removeMember']);
 
     // Accreditation Cycles (CRUD + history + dashboard)
+    Route::get('accreditation-levels', [AccreditationCycleController::class, 'levels']);
     Route::get('vpaa/dashboard', [AccreditationCycleController::class, 'vpaaDashboard']);
     Route::get('accreditation-cycles/dashboard', [AccreditationCycleController::class, 'dashboard']);
     Route::get('accreditation-cycles/level-status', [AccreditationCycleController::class, 'levelStatus']);
@@ -81,12 +88,18 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('accreditation-areas/{accreditationArea}/parameters', [FacultyAreaContentController::class, 'parameters']);
     Route::post('accreditation-areas/{accreditationArea}/parameters', [FacultyAreaContentController::class, 'storeParameter']);
     Route::get('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'rows']);
+    Route::get('parameters/{parameter}/compiled-pdf', [FacultyAreaContentController::class, 'compileParameter']);
     Route::post('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'storeRow']);
     Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
     Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
     Route::delete('parameter-rows/{parameterContentRow}/documents', [FacultyAreaContentController::class, 'destroyRowDocuments']);
     Route::post('parameter-rows/{parameterContentRow}/submit', [FacultyAreaContentController::class, 'submitRow']);
+    Route::get('parameter-rows/{parameterContentRow}/compiled-pdf', [FacultyAreaContentController::class, 'compileRow']);
     Route::delete('parameter-rows/{parameterContentRow}', [FacultyAreaContentController::class, 'destroyRow']);
+    Route::get('parameter-rows/{parameterContentRow}/comments', [ParameterRowCommentController::class, 'index']);
+    Route::post('parameter-rows/{parameterContentRow}/comments', [ParameterRowCommentController::class, 'store']);
+    Route::post('parameter-rows/{parameterContentRow}/comments/read', [ParameterRowCommentController::class, 'markRead']);
+    Route::get('review/areas', [FacultyAreaContentController::class, 'reviewAreas']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
     Route::get('program-chair/review-documents', [AccreditationAreaController::class, 'programChairReviewDocuments']);
@@ -192,7 +205,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     // Dashboard Analytics (real data from database queries)
     Route::get('dashboard', [DashboardController::class, 'index']);
 
-    Route::get('dean/dashboard', [DeanController::class, 'dashboard']); 
+    Route::get('dean/dashboard', [DeanController::class, 'dashboard']);
     Route::get('dean/programs', [DeanController::class, 'programs']);
     Route::get('dean/programs/{programId}/chair', [DeanController::class, 'getProgramChair']);
     Route::get('dean/documents', [DeanController::class, 'documents']);
@@ -244,22 +257,22 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('admin/system/backup', [SystemController::class, 'backup']);
 
     Route::get('admin/audit-logs', [
-        	App\Http\Controllers\Api\AuditController::class,
-        'index'
+        AuditController::class,
+        'index',
     ]);
     Route::get('admin/login-history', [
-        	App\Http\Controllers\Api\AuditController::class,
-        'loginHistory'
+        AuditController::class,
+        'loginHistory',
     ]);
     Route::get('admin/sessions', [
-        	App\Http\Controllers\Api\AuditController::class,
-        'sessions'
+        AuditController::class,
+        'sessions',
     ]);
 
     // Join team using the 6-character team code
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
     // Teams management (Program Chairs / Admins can create teams and codes)
-    Route::apiResource('teams', \App\Http\Controllers\Api\TeamController::class)->only(['index', 'store', 'show']);
+    Route::apiResource('teams', TeamController::class)->only(['index', 'store', 'show']);
 
     // Reports (compliance, program, college, area, accreditation + PDF/Excel exports)
     Route::get('reports', [ReportController::class, 'index']);
@@ -270,9 +283,9 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::get('reports/accreditation-cycles/{cycle}', [ReportController::class, 'accreditation']);
 
     // Audit and login history reporting
-    Route::get('audit-logs', [\App\Http\Controllers\Api\AuditController::class, 'index']);
-    Route::get('audit-logs/summaries', [\App\Http\Controllers\Api\AuditController::class, 'summaries']);
-    Route::get('login-history', [\App\Http\Controllers\Api\AuditController::class, 'loginHistory']);
+    Route::get('audit-logs', [AuditController::class, 'index']);
+    Route::get('audit-logs/summaries', [AuditController::class, 'summaries']);
+    Route::get('login-history', [AuditController::class, 'loginHistory']);
 });
 
 Route::middleware(['security', 'audit.api'])->get('/health', function (Request $request) {

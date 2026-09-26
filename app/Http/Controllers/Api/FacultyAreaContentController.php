@@ -9,14 +9,20 @@ use App\Http\Resources\ParameterContentRowResource;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationParameter;
 use App\Models\ParameterContentRow;
+use App\Models\ParameterRowComment;
+use App\Models\ParameterRowCommentRead;
 use App\Models\ParameterRowStatus;
 use App\Models\User;
+use App\Policies\ParameterContentRowPolicy;
 use App\Services\AreaProgressService;
+use App\Services\CompiledEvidencePdfService;
 use App\Services\EvidenceStorage;
 use App\Support\ActiveCycle;
 use App\Support\AreaEvidenceGate;
 use App\Support\AreaParameterCatalog;
+use App\Support\OrgScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class FacultyAreaContentController extends Controller
 {
@@ -131,7 +137,7 @@ class FacultyAreaContentController extends Controller
 
     public function rows(Request $request, AccreditationParameter $parameter)
     {
-        $parameter->load('area');
+        $parameter->load('area.cycle');
         $this->assertCanViewArea($request->user(), $parameter->area);
 
         AreaParameterCatalog::ensureSeeded($parameter->area);
@@ -140,11 +146,98 @@ class FacultyAreaContentController extends Controller
             ->with(['status.doneBy', 'documents.versions', 'documents.uploader'])
             ->get();
 
+        $canComment = ParameterContentRowPolicy::canAccessArea($request->user(), $parameter->area);
+        $this->attachCommentMeta($rows, $request->user(), $canComment);
+
         return response()->json([
             'success' => true,
             'message' => 'Parameter content rows retrieved successfully.',
             'data' => ParameterContentRowResource::collection($rows),
         ]);
+    }
+
+    /**
+     * Areas a reviewer (Program Chair/Dean/QA/VPAA/Accreditor) may browse and
+     * comment on, scoped via OrgScope rather than direct area assignment.
+     */
+    public function reviewAreas(Request $request)
+    {
+        $user = $request->user();
+        $programIds = OrgScope::visibleProgramIds($user);
+
+        $query = AccreditationArea::with(['chair', 'cycle.program', 'members.user', 'reviews'])
+            ->whereNotNull('code');
+
+        if ($programIds !== null) {
+            if ($programIds === []) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No reviewable areas found.',
+                    'data' => [],
+                ]);
+            }
+
+            $query->whereHas('cycle', fn ($cycle) => $cycle->whereIn('program_id', $programIds));
+        }
+
+        $areas = $query->orderBy('code')->orderBy('id')->get();
+        $areas = ActiveCycle::uniqueAreasPerProgram($areas);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Reviewable accreditation areas retrieved successfully.',
+            'data' => MyAreaResource::collection($areas),
+        ]);
+    }
+
+    /**
+     * Attach comment-thread metadata (count, unread count, can-comment) onto
+     * each row as plain attributes so ParameterContentRowResource can read
+     * them without an N+1 policy check per row.
+     *
+     * @param  Collection<int, ParameterContentRow>  $rows
+     */
+    private function attachCommentMeta(Collection $rows, ?User $user, bool $canComment): void
+    {
+        $ids = $rows->pluck('id');
+
+        if ($ids->isEmpty() || ! $user) {
+            return;
+        }
+
+        $counts = ParameterRowComment::query()
+            ->whereIn('content_row_id', $ids)
+            ->selectRaw('content_row_id, count(*) as aggregate')
+            ->groupBy('content_row_id')
+            ->pluck('aggregate', 'content_row_id');
+
+        $lastReads = ParameterRowCommentRead::query()
+            ->where('user_id', $user->id)
+            ->whereIn('content_row_id', $ids)
+            ->pluck('last_read_at', 'content_row_id');
+
+        $unreadCounts = ParameterRowComment::query()
+            ->whereIn('content_row_id', $ids)
+            ->where(function ($scoped) use ($user) {
+                $scoped->whereNull('author_id')->orWhere('author_id', '!=', $user->id);
+            })
+            ->get(['content_row_id', 'created_at'])
+            ->groupBy('content_row_id')
+            ->map(function (Collection $comments, $rowId) use ($lastReads) {
+                $lastReadAt = $lastReads->get($rowId);
+
+                if (! $lastReadAt) {
+                    return $comments->count();
+                }
+
+                return $comments->filter(fn ($comment) => $comment->created_at->gt($lastReadAt))->count();
+            });
+
+        foreach ($rows as $row) {
+            $row->setAttribute('commentCount', (int) ($counts->get($row->id) ?? 0));
+            $row->setAttribute('unreadCommentCount', (int) ($unreadCounts->get($row->id) ?? 0));
+            $row->setAttribute('canComment', $canComment);
+        }
     }
 
     public function storeRow(Request $request, AccreditationParameter $parameter)
@@ -312,11 +405,58 @@ class FacultyAreaContentController extends Controller
         ]);
     }
 
+    public function compileParameter(Request $request, AccreditationParameter $parameter)
+    {
+        $parameter->load('area.cycle.program.college');
+        AreaEvidenceGate::assertCanManageEvidence($request->user(), $parameter->area);
+
+        try {
+            $service = app(CompiledEvidencePdfService::class);
+            $binary = $service->compileParameter($parameter);
+        } catch (\RuntimeException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        return $this->pdfDownload($binary, $service->filenameForParameter($parameter));
+    }
+
+    public function compileRow(Request $request, ParameterContentRow $parameterContentRow)
+    {
+        $parameterContentRow->load('parameter.area.cycle.program.college');
+        AreaEvidenceGate::assertCanManageEvidence($request->user(), $parameterContentRow->parameter?->area);
+
+        try {
+            $service = app(CompiledEvidencePdfService::class);
+            $binary = $service->compileRow($parameterContentRow);
+        } catch (\RuntimeException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        return $this->pdfDownload($binary, $service->filenameForRow($parameterContentRow));
+    }
+
+    private function pdfDownload(string $binary, string $filename)
+    {
+        return response($binary, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Content-Length' => (string) strlen($binary),
+            'Cache-Control' => 'private, max-age=0, must-revalidate',
+            'Pragma' => 'public',
+        ]);
+    }
+
     /**
      * One AACCUP area per code, preferring the program's active cycle copy.
      *
-     * @param  \Illuminate\Support\Collection<int, AccreditationArea>  $areas
-     * @return \Illuminate\Support\Collection<int, AccreditationArea>
+     * @param  Collection<int, AccreditationArea>  $areas
+     * @return Collection<int, AccreditationArea>
      */
     private function uniqueCatalogAreas($areas)
     {
@@ -348,11 +488,17 @@ class FacultyAreaContentController extends Controller
             abort(403, 'You are not allowed to view this area.');
         }
 
-        if ($user->isQA() || $user->isVPAA() || $user->isSuperAdmin() || $user->isAccreditor()) {
+        if ($user->isAssignedToArea($area)) {
             return;
         }
 
-        if ($user->isAssignedToArea($area)) {
+        $area->loadMissing('cycle');
+        $programId = $area->cycle?->program_id;
+
+        // Reviewer visibility (Dean: college programs, Program Chair: their
+        // program, QA/VPAA/Accreditor/SuperAdmin: institution-wide) is the
+        // same rule used to gate the comment thread; see OrgScope.
+        if ($programId !== null && OrgScope::canSeeProgram($user, (int) $programId)) {
             return;
         }
 

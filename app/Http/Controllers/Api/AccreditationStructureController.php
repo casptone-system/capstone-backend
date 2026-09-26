@@ -11,8 +11,10 @@ use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
 use App\Models\AccreditationInstrument;
 use App\Models\AccreditationRequirement;
+use App\Models\DesignationFile;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
+use App\Services\DesignationLetterService;
 use App\Support\OrgScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -129,6 +131,7 @@ class AccreditationStructureController extends Controller
         $validated = $request->validate([
             'chair_id' => ['required', 'exists:users,id'],
         ]);
+        $previousChairId = (int) ($accreditationArea->chair_id ?? 0);
         $assignee = User::findOrFail($validated['chair_id']);
 
         if (! $assignee->isAreaIncharge() || ! $assignee->belongsToProgram((int) $cycle->program_id)) {
@@ -136,6 +139,14 @@ class AccreditationStructureController extends Controller
         }
 
         $accreditationArea->update(['chair_id' => $assignee->id]);
+        if ($previousChairId !== (int) $assignee->id) {
+            app(DesignationLetterService::class)->issue(
+                $assignee,
+                $accreditationArea->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+                DesignationFile::ROLE_CHAIR,
+                $user,
+            );
+        }
         $assignee->notify(new AreaInChargeAssignedNotification($accreditationArea->fresh(['cycle.program'])));
 
         return response()->json([
@@ -169,3 +180,4 @@ class AccreditationStructureController extends Controller
         );
     }
 }
+

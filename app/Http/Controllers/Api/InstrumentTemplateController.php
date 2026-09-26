@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AccreditationCycle;
 use App\Models\InstrumentTemplate;
 use App\Models\InstrumentTemplateArea;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class InstrumentTemplateController extends Controller
 {
@@ -39,7 +41,7 @@ class InstrumentTemplateController extends Controller
         $validated = $request->validate([
             'id' => ['nullable', 'exists:instrument_templates,id'],
             'name' => ['required', 'string', 'max:255'],
-            'level' => ['required', 'in:Level I,Level II,Level III,Level IV'],
+            'level' => ['required', Rule::in(AccreditationCycle::LEVELS)],
             'description' => ['nullable', 'string'],
             'areas' => ['required', 'array', 'min:1'],
             'areas.*.id' => ['nullable', 'integer'],
@@ -62,7 +64,7 @@ class InstrumentTemplateController extends Controller
                 ->first();
 
             if (! $template) {
-                $template = new InstrumentTemplate();
+                $template = new InstrumentTemplate;
             }
 
             $template->fill([

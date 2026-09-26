@@ -24,7 +24,7 @@ final class ActiveCycle
             }
         }
 
-        return $program->accreditationCycles->firstWhere('level', 'Level I')
+        return $program->accreditationCycles->firstWhere('level', AccreditationCycle::DEFAULT_LEVEL)
             ?: $program->accreditationCycles->sortByDesc('id')->first();
     }
 
@@ -95,7 +95,7 @@ final class ActiveCycle
             }
         }
 
-        return $group->firstWhere('level', 'Level I')
+        return $group->firstWhere('level', AccreditationCycle::DEFAULT_LEVEL)
             ?: $group->sortByDesc('id')->first();
     }
 }

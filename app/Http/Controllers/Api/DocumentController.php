@@ -13,13 +13,14 @@ use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
 use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
+use App\Support\ParameterRowCommentNotifier;
+use App\Support\RowCommentRoleLabel;
 use Illuminate\Http\Request;
 
 class DocumentController extends Controller
 {
-    public function __construct(private EvidenceStorage $evidenceStorage)
-    {
-    }
+    public function __construct(private EvidenceStorage $evidenceStorage) {}
+
     /**
      * Display a paginated list of documents.
      */
@@ -241,7 +242,7 @@ class DocumentController extends Controller
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'school_year' => ['nullable', 'string', 'max:20'],
-            'status' => ['nullable', 'in:' . implode(',', Document::STATUSES)],
+            'status' => ['nullable', 'in:'.implode(',', Document::STATUSES)],
         ]);
 
         $document->update($validated);
@@ -303,6 +304,7 @@ class DocumentController extends Controller
 
         if ($document->content_row_id) {
             app(AreaProgressService::class)->refreshForContentRow((int) $document->content_row_id);
+            $this->persistRevisionRequestComment($document, $validated['comment'], $request->user());
         }
 
         return response()->json([
@@ -528,6 +530,32 @@ class DocumentController extends Controller
                 $user->notify(new DocumentUploadedNotification($document, $uploader->name));
             }
         }
+    }
+
+    /**
+     * Mirror the Return reason into the row's comment thread so it is no
+     * longer silently discarded, and so the Area Chair/members see it
+     * alongside any other feedback on that row.
+     */
+    private function persistRevisionRequestComment(Document $document, string $comment, User $author): void
+    {
+        $document->loadMissing('contentRow.parameter.area.cycle', 'contentRow.parameter.area.chair', 'contentRow.parameter.area.members.user');
+        $row = $document->contentRow;
+        $area = $row?->parameter?->area;
+
+        if (! $row || ! $area) {
+            return;
+        }
+
+        $rowComment = $row->comments()->create([
+            'author_id' => $author->id,
+            'author_role' => RowCommentRoleLabel::for($author, $area),
+            'body' => $comment,
+            'source' => 'revision_request',
+            'document_id' => $document->id,
+        ]);
+
+        ParameterRowCommentNotifier::notify($row, $rowComment, $author, $area);
     }
 
     /**

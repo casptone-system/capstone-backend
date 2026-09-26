@@ -4,27 +4,33 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AccreditationArea;
+use App\Models\AccreditationCycle;
 use App\Models\AccreditationParameter;
 use App\Models\AccreditationRequirement;
 use App\Models\AccreditationWorkspace;
 use App\Models\AreaMember;
+use App\Models\CriterionEvidence;
+use App\Models\DesignationFile;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
 use App\Services\AccreditationWorkspaceService;
+use App\Services\DesignationLetterService;
 use App\Services\EvidenceStorage;
 use App\Support\AreaAssignmentNotifier;
 use App\Support\OrgScope;
 use App\Support\RoleSlug;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AccreditationWorkspaceController extends Controller
 {
     public function __construct(
         private AccreditationWorkspaceService $workspaces,
-        private EvidenceStorage $evidenceStorage
-    ) {
-    }
+        private EvidenceStorage $evidenceStorage,
+        private DesignationLetterService $letters,
+    ) {}
 
     public function index(Request $request)
     {
@@ -61,7 +67,7 @@ class AccreditationWorkspaceController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'level' => ['required', 'in:Level I,Level II,Level III,Level IV'],
+            'level' => ['required', Rule::in(AccreditationCycle::LEVELS)],
             'deadline' => ['nullable', 'date'],
         ]);
 
@@ -98,6 +104,7 @@ class AccreditationWorkspaceController extends Controller
         ]);
 
         $candidate = User::findOrFail($validated['chair_id']);
+        $previousChairId = (int) ($area->chair_id ?? 0);
         $programId = (int) $workspace->program_id;
         $isProgramChairAssignee = $candidate->ownsAssignedProgram($programId);
 
@@ -112,6 +119,14 @@ class AccreditationWorkspaceController extends Controller
         $area->update(['chair_id' => $candidate->id]);
         if (! $candidate->isAreaIncharge()) {
             $candidate->assignRole(RoleSlug::AREA_IN_CHARGE);
+        }
+        if ($previousChairId !== (int) $candidate->id) {
+            $this->letters->issue(
+                $candidate,
+                $area->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+                DesignationFile::ROLE_CHAIR,
+                $request->user(),
+            );
         }
         $candidate->notify(new AreaInChargeAssignedNotification($area->fresh(['cycle.program'])));
 
@@ -146,6 +161,12 @@ class AccreditationWorkspaceController extends Controller
             'role' => 'member',
         ]);
 
+        $this->letters->issue(
+            $candidate,
+            $area->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+            DesignationFile::ROLE_MEMBER,
+            $request->user(),
+        );
         AreaAssignmentNotifier::notifyMember($candidate, $area->fresh(['cycle.program']), $request->user());
 
         return response()->json([
@@ -252,10 +273,10 @@ class AccreditationWorkspaceController extends Controller
         ]);
     }
 
-    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence): StreamedResponse|\Illuminate\Http\JsonResponse
+    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence): StreamedResponse|JsonResponse
     {
         $this->assertCanView($request->user(), $workspace);
-        $record = \App\Models\CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
+        $record = CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
 
         $download = $this->evidenceStorage->download($record->file_path, $record->original_name);
         if ($download) {
@@ -278,7 +299,7 @@ class AccreditationWorkspaceController extends Controller
     public function previewEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence)
     {
         $this->assertCanView($request->user(), $workspace);
-        $record = \App\Models\CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
+        $record = CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
 
         $stream = $this->evidenceStorage->streamInline(
             $record->file_path,

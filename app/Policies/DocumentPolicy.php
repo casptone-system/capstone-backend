@@ -13,7 +13,7 @@ class DocumentPolicy
             return true;
         }
 
-        if ($user->isQA() || $user->isVPAA()) {
+        if ($user->isQA() || $user->isVPAA() || $user->isAccreditor()) {
             return true;
         }
 

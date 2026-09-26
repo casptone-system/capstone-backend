@@ -13,26 +13,26 @@ use App\Support\AreaParameterCatalog;
 class AaccupStructureService
 {
     /**
-     * Level I–III share the same 10 AACCUP areas and parameters.
+     * Preliminary and Level I–III share the same 10 AACCUP areas and parameters.
      * Level IV uses the same area list until a distinct instrument is defined.
      *
      * @return list<string>
      */
     public function sharedLevels(): array
     {
-        return ['Level I', 'Level II', 'Level III'];
+        return array_values(array_diff(AccreditationCycle::LEVELS, ['Level IV']));
     }
 
     public function seedInstrumentTemplates(): void
     {
-        foreach ([...$this->sharedLevels(), 'Level IV'] as $level) {
+        foreach (AccreditationCycle::LEVELS as $level) {
             $template = InstrumentTemplate::query()->updateOrCreate(
                 ['level' => $level, 'version' => 1],
                 [
                     'name' => "AACCUP {$level} Instrument",
                     'description' => $level === 'Level IV'
-                        ? "Default {$level} instrument. Area list matches Levels I–III until a Level IV-specific instrument is published."
-                        : "Default {$level} instrument. Levels I–III share the same 10 AACCUP areas and parameters.",
+                        ? "Default {$level} instrument. Area list matches the other levels until a Level IV-specific instrument is published."
+                        : "Default {$level} instrument. Preliminary and Levels I–III share the same 10 AACCUP areas and parameters.",
                     'is_active' => true,
                     'status' => 'published',
                 ]
@@ -142,7 +142,7 @@ class AaccupStructureService
 
         $level = in_array($program->accreditation_level, AccreditationCycle::LEVELS, true)
             ? $program->accreditation_level
-            : 'Level I';
+            : AccreditationCycle::DEFAULT_LEVEL;
 
         $cycle = $this->ensureCycle($program, $level);
 
@@ -159,7 +159,9 @@ class AaccupStructureService
 
     /**
      * Current program level and every higher AACCUP level stay open.
-     * Lower levels are treated as already reached and are not created here.
+     * Lower levels are treated as already reached and are not created here,
+     * except for "always available" levels (e.g. Preliminary), which are
+     * always ensured regardless of the program's current level.
      */
     public function ensureOpenLevels(Program $program): void
     {
@@ -167,13 +169,16 @@ class AaccupStructureService
         $program->loadMissing('accreditationCycles');
 
         foreach (AccreditationCycle::LEVELS as $level) {
-            if (AccreditationCycle::rank($level) < AccreditationCycle::rank($current)) {
+            $alwaysAvailable = in_array($level, AccreditationCycle::ALWAYS_AVAILABLE_LEVELS, true);
+
+            if (! $alwaysAvailable && AccreditationCycle::rank($level) < AccreditationCycle::rank($current)) {
                 continue;
             }
 
             $cycle = $program->accreditationCycles->firstWhere('level', $level);
             if ($cycle) {
                 $this->seedCycleAreas($cycle);
+
                 continue;
             }
 

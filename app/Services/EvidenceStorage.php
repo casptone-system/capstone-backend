@@ -53,6 +53,19 @@ class EvidenceStorage
         return $this->locate($path) !== null;
     }
 
+    public function getContents(string $path): ?string
+    {
+        $disk = $this->locate($path);
+
+        if ($disk === null) {
+            return null;
+        }
+
+        $contents = Storage::disk($disk)->get($path);
+
+        return $contents === false ? null : $contents;
+    }
+
     /**
      * Prefer the configured evidence disk, then fall back to local during
      * a rolling migration so existing files remain downloadable.

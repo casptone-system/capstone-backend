@@ -2,32 +2,32 @@
 
 namespace App\Providers;
 
-use App\Models\AccreditationArea;
+use App\Filesystem\SupabaseStorageAdapter;
 use App\Models\AuditLog;
 use App\Models\College;
 use App\Models\Document;
 use App\Models\Invitation;
+use App\Models\ParameterContentRow;
 use App\Models\Program;
 use App\Models\ProgramMember;
 use App\Models\Review;
-use App\Models\Task;
 use App\Models\User;
-use App\Policies\AccreditationAreaPolicy;
 use App\Policies\AuditLogPolicy;
 use App\Policies\DeanPolicy;
 use App\Policies\DocumentPolicy;
 use App\Policies\InvitationPolicy;
+use App\Policies\ParameterContentRowPolicy;
 use App\Policies\ProgramMemberPolicy;
 use App\Policies\ProgramPolicy;
 use App\Policies\ReviewPolicy;
-use App\Policies\TaskPolicy;
-use App\Filesystem\SupabaseStorageAdapter;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use League\Flysystem\Filesystem;
+use Monolog\Handler\StreamHandler;
+use Monolog\Logger;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -59,8 +59,8 @@ class AppServiceProvider extends ServiceProvider
         });
 
         Log::extend('audit', function ($app, array $config) {
-            return new \Monolog\Logger('audit', [
-                new \Monolog\Handler\StreamHandler(storage_path('logs/audit.log'), \Monolog\Logger::INFO),
+            return new Logger('audit', [
+                new StreamHandler(storage_path('logs/audit.log'), Logger::INFO),
             ]);
         });
 
@@ -93,5 +93,6 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Invitation::class, InvitationPolicy::class);
         Gate::policy(ProgramMember::class, ProgramMemberPolicy::class);
         Gate::policy(College::class, DeanPolicy::class);
+        Gate::policy(ParameterContentRow::class, ParameterContentRowPolicy::class);
     }
 }

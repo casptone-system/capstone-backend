@@ -10,15 +10,19 @@ use App\Http\Resources\ReviewResource;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationCycle;
 use App\Models\AreaMember;
+use App\Models\DesignationFile;
+use App\Models\AuditLog;
 use App\Models\CriterionEvidence;
 use App\Models\Document;
 use App\Models\Program;
 use App\Models\Review;
 use App\Models\User;
+use App\Notifications\FacultySubmissionNotification;
 use App\Services\AaccupStructureService;
 use App\Services\AreaAssignmentService;
 use App\Services\AreaDeadlineReminderService;
 use App\Services\AreaProgressService;
+use App\Services\DesignationLetterService;
 use App\Services\EvidenceStorage;
 use App\Support\AreaAssignmentNotifier;
 use App\Support\AreaDocumentRules;
@@ -26,16 +30,19 @@ use App\Support\AreaEvidenceGate;
 use App\Support\OrgScope;
 use App\Support\RoleGate;
 use Illuminate\Http\Request;
-use InvalidArgumentException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
 class AccreditationAreaController extends Controller
 {
     public function __construct(
         private EvidenceStorage $evidenceStorage,
         private AreaAssignmentService $assignments,
-    ) {
-    }
+        private DesignationLetterService $letters,
+    ) {}
+
     /**
      * Display a paginated list of accreditation areas for a cycle.
      */
@@ -80,7 +87,7 @@ class AccreditationAreaController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'chair_id' => ['nullable', 'exists:users,id'],
-            'status' => ['nullable', 'in:' . implode(',', AccreditationArea::STATUSES)],
+            'status' => ['nullable', 'in:'.implode(',', AccreditationArea::STATUSES)],
         ]);
 
         $area = AccreditationArea::create($validated);
@@ -117,7 +124,7 @@ class AccreditationAreaController extends Controller
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'chair_id' => ['nullable', 'exists:users,id'],
-            'status' => ['nullable', 'in:' . implode(',', AccreditationArea::STATUSES)],
+            'status' => ['nullable', 'in:'.implode(',', AccreditationArea::STATUSES)],
         ]);
 
         $accreditationArea->update($validated);
@@ -162,7 +169,8 @@ class AccreditationAreaController extends Controller
             $result = $this->assignments->assignChair(
                 $accreditationArea,
                 (int) $validated['chair_id'],
-                $request->boolean('confirm_reassign')
+                $request->boolean('confirm_reassign'),
+                $request->user()
             );
         } catch (InvalidArgumentException $exception) {
             abort(422, $exception->getMessage());
@@ -241,6 +249,12 @@ class AccreditationAreaController extends Controller
 
         $faculty = $member->user;
         if ($faculty) {
+            $this->letters->issue(
+                $faculty,
+                $accreditationArea->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+                DesignationFile::ROLE_MEMBER,
+                $request->user(),
+            );
             AreaAssignmentNotifier::notifyMember(
                 $faculty,
                 $accreditationArea,
@@ -250,7 +264,7 @@ class AccreditationAreaController extends Controller
             );
 
             // Log activity
-            \App\Models\AuditLog::create([
+            AuditLog::create([
                 'user_id' => $request->user()->id,
                 'action' => 'assign_faculty_to_area',
                 'model' => 'AccreditationArea',
@@ -381,7 +395,7 @@ class AccreditationAreaController extends Controller
 
             $programChair = $area->cycle?->program?->chairUser;
             if ($programChair) {
-                $programChair->notify(new \App\Notifications\FacultySubmissionNotification([
+                $programChair->notify(new FacultySubmissionNotification([
                     'faculty_name' => $user->name,
                     'area_name' => $area->name,
                     'program_name' => $area->cycle->program->name,
@@ -390,7 +404,7 @@ class AccreditationAreaController extends Controller
                 ]));
             }
 
-            \App\Models\AuditLog::create([
+            AuditLog::create([
                 'user_id' => $user->id,
                 'action' => 'submit_area_files',
                 'model' => 'AccreditationArea',
@@ -414,7 +428,7 @@ class AccreditationAreaController extends Controller
                 'submission' => true,
             ], 200);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to submit area files', [
+            Log::error('Failed to submit area files', [
                 'error' => $e->getMessage(),
                 'user_id' => $user->id,
                 'area_id' => $validated['area_id'] ?? null,
@@ -428,11 +442,12 @@ class AccreditationAreaController extends Controller
     }
 
     /**
-     * List Level I–IV folders for the authenticated Program Chair, with the
-     * 10 fixed AACCUP areas under each open accreditation cycle.
+     * List accreditation level folders for the authenticated Program Chair,
+     * with the 10 fixed AACCUP areas under each open accreditation cycle.
      *
      * The program's current level and every higher level are opened (and
      * seeded) automatically. Lower levels stay visible as already reached.
+     * Always-available levels (e.g. Preliminary) stay open regardless.
      */
     public function programChairAreas(Request $request)
     {
@@ -513,9 +528,11 @@ class AccreditationAreaController extends Controller
     /**
      * Level-first Area Documents tree for the authenticated Program Chair.
      *
-     * Returns Level I–IV folders. The program's current level and every
-     * higher level are opened automatically; lower levels are marked reached.
-     * File lists are loaded per area via GET /program-chair/areas/{area}/documents.
+     * Returns folders for every accreditation level. The program's current
+     * level and every higher level are opened automatically; lower levels
+     * are marked reached. Always-available levels (e.g. Preliminary) stay
+     * open regardless. File lists are loaded per area via
+     * GET /program-chair/areas/{area}/documents.
      */
     public function programChairAreaDocuments(Request $request)
     {
@@ -967,6 +984,12 @@ class AccreditationAreaController extends Controller
             $accreditationArea->loadMissing('cycle.program');
             $assignedBy = $request->user();
             User::whereIn('id', $newMemberIds)->get()->each(function (User $faculty) use ($accreditationArea, $assignedBy) {
+                $this->letters->issue(
+                    $faculty,
+                    $accreditationArea,
+                    DesignationFile::ROLE_MEMBER,
+                    $assignedBy,
+                );
                 AreaAssignmentNotifier::notifyMember($faculty, $accreditationArea, $assignedBy);
             });
         }
@@ -984,7 +1007,7 @@ class AccreditationAreaController extends Controller
     }
 
     /**
-     * @return array{program: Program, currentLevel: string, cyclesByLevel: \Illuminate\Support\Collection}
+     * @return array{program: Program, currentLevel: string, cyclesByLevel: Collection}
      */
     private function prepareProgramLevels(Program $program): array
     {

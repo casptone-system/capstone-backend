@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\AccreditationArea;
+use App\Models\DesignationFile;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
 use App\Support\RoleSlug;
@@ -10,14 +11,16 @@ use InvalidArgumentException;
 
 class AreaAssignmentService
 {
-    public function __construct(private AreaProgressService $progress)
-    {
+    public function __construct(
+        private AreaProgressService $progress,
+        private DesignationLetterService $letters,
+    ) {
     }
 
     /**
      * @return array{assigned: true, area: AccreditationArea}|array{assigned: false, requiresConfirmation: true, currentChair: ?array{id: int, name: string, email: string}}
      */
-    public function assignChair(AccreditationArea $area, int $chairId, bool $confirmReassign = false): array
+    public function assignChair(AccreditationArea $area, int $chairId, bool $confirmReassign = false, ?User $designatedBy = null): array
     {
         $area->load('chair');
         $currentChairId = $area->chair_id ? (int) $area->chair_id : null;
@@ -45,6 +48,12 @@ class AreaAssignmentService
         }
 
         if ($currentChairId !== $chairId) {
+            $this->letters->issue(
+                $assignee,
+                $area->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+                DesignationFile::ROLE_CHAIR,
+                $designatedBy,
+            );
             $assignee->notify(new AreaInChargeAssignedNotification(
                 $area->fresh(['cycle.program'])
             ));

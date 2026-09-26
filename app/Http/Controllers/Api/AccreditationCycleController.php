@@ -5,9 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AccreditationCycleResource;
 use App\Models\AccreditationCycle;
+use App\Models\AccreditationWorkspace;
+use App\Models\AuditLog;
+use App\Models\AuditLogDetail;
 use App\Models\Program;
 use App\Models\User;
 use App\Notifications\AccreditationCycleNoticeNotification;
+use App\Services\AaccupStructureService;
 use App\Services\AccreditationLevelStatusService;
 use App\Services\AreaProgressService;
 use App\Support\ActiveCycle;
@@ -15,7 +19,9 @@ use App\Support\OrgScope;
 use App\Support\RoleGate;
 use App\Support\RoleSlug;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 class AccreditationCycleController extends Controller
@@ -85,18 +91,18 @@ class AccreditationCycleController extends Controller
         $validated = $request->validate([
             'college_id' => ['required', 'exists:colleges,id'],
             'program_id' => ['required', 'exists:programs,id'],
-            'level' => ['nullable', 'in:' . implode(',', AccreditationCycle::LEVELS)],
-            'status' => ['required', 'in:' . implode(',', AccreditationCycle::STATUSES)],
+            'level' => ['nullable', 'in:'.implode(',', AccreditationCycle::LEVELS)],
+            'status' => ['required', 'in:'.implode(',', AccreditationCycle::STATUSES)],
             'phase' => ['nullable', 'string', 'max:255'],
             'instrument_name' => ['nullable', 'string', 'max:255'],
             'valid_until' => ['nullable', 'date'],
             'scheduled_visit' => ['nullable', 'date'],
             'remarks' => ['nullable', 'string'],
         ]);
-        
+
         // Set initial workflow status
         $validated['workflow_status'] = 'Initial Notice';
-        $validated['level'] = $validated['level'] ?? 'Level I';
+        $validated['level'] = $validated['level'] ?? AccreditationCycle::DEFAULT_LEVEL;
         $validated['phase'] = $validated['phase'] ?? null;
 
         $program = Program::findOrFail($validated['program_id']);
@@ -105,13 +111,13 @@ class AccreditationCycleController extends Controller
             $validator = Validator::make($validated, []);
             $validator->errors()->add('program_id', 'The selected program does not belong to the selected college.');
 
-            throw new \Illuminate\Validation\ValidationException($validator);
+            throw new ValidationException($validator);
         }
 
         $validated['college_id'] = $program->college_id;
 
         $cycle = AccreditationCycle::create($validated);
-        app(\App\Services\AaccupStructureService::class)->seedCycleAreas($cycle);
+        app(AaccupStructureService::class)->seedCycleAreas($cycle);
 
         $dean = User::where('college_id', $program->college_id)
             ->whereHas('roles', function ($query) {
@@ -154,14 +160,14 @@ class AccreditationCycleController extends Controller
         $validated = $request->validate([
             'college_id' => ['sometimes', 'required', 'exists:colleges,id'],
             'program_id' => ['sometimes', 'required', 'exists:programs,id'],
-            'level' => ['sometimes', 'required', 'in:' . implode(',', AccreditationCycle::LEVELS)],
-            'status' => ['sometimes', 'required', 'in:' . implode(',', AccreditationCycle::STATUSES)],
+            'level' => ['sometimes', 'required', 'in:'.implode(',', AccreditationCycle::LEVELS)],
+            'status' => ['sometimes', 'required', 'in:'.implode(',', AccreditationCycle::STATUSES)],
             'phase' => ['nullable', 'string', 'max:255'],
             'instrument_name' => ['nullable', 'string', 'max:255'],
             'valid_until' => ['nullable', 'date'],
             'scheduled_visit' => ['nullable', 'date'],
             'remarks' => ['nullable', 'string'],
-            'workflow_status' => ['sometimes', 'in:' . implode(',', AccreditationCycle::WORKFLOW_STATUSES)],
+            'workflow_status' => ['sometimes', 'in:'.implode(',', AccreditationCycle::WORKFLOW_STATUSES)],
         ]);
 
         $actor = $request->user();
@@ -189,7 +195,7 @@ class AccreditationCycleController extends Controller
                 $validator = Validator::make($validated, []);
                 $validator->errors()->add('program_id', 'The selected program does not belong to the selected college.');
 
-                throw new \Illuminate\Validation\ValidationException($validator);
+                throw new ValidationException($validator);
             }
 
             $validated['college_id'] = $program->college_id;
@@ -324,7 +330,7 @@ class AccreditationCycleController extends Controller
         }
 
         $validated = $request->validate([
-            'level' => ['required', 'in:' . implode(',', AccreditationCycle::LEVELS)],
+            'level' => ['required', 'in:'.implode(',', AccreditationCycle::LEVELS)],
             'phase' => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -345,10 +351,10 @@ class AccreditationCycleController extends Controller
         $accreditationCycle->save();
 
         $workspaceUpdate = ['level' => $accreditationCycle->level];
-        if (\Illuminate\Support\Facades\Schema::hasColumn('accreditation_workspaces', 'phase') && $accreditationCycle->phase) {
+        if (Schema::hasColumn('accreditation_workspaces', 'phase') && $accreditationCycle->phase) {
             $workspaceUpdate['phase'] = $accreditationCycle->phase;
         }
-        \App\Models\AccreditationWorkspace::where('cycle_id', $accreditationCycle->id)->update($workspaceUpdate);
+        AccreditationWorkspace::where('cycle_id', $accreditationCycle->id)->update($workspaceUpdate);
 
         $after = [
             'level' => $accreditationCycle->level,
@@ -356,7 +362,7 @@ class AccreditationCycleController extends Controller
             'workflow_status' => $accreditationCycle->workflow_status,
         ];
 
-        \App\Models\AuditLog::create([
+        AuditLog::create([
             'user_id' => $user->id,
             'user_email' => $user->email,
             'event' => 'SETUP_UPDATED',
@@ -366,8 +372,8 @@ class AccreditationCycleController extends Controller
             'ip_address' => $request->ip(),
         ]);
 
-        \App\Models\AuditLogDetail::create([
-            'audit_log_id' => \App\Models\AuditLog::latest()->first()?->id,
+        AuditLogDetail::create([
+            'audit_log_id' => AuditLog::latest()->first()?->id,
             'user_agent' => json_encode(['before' => $before, 'after' => $after]),
             'exception' => null,
         ]);
@@ -515,6 +521,8 @@ class AccreditationCycleController extends Controller
             'program' => $program?->name ?? 'Unknown Program',
             'college' => $college?->name ?? 'Unknown College',
             'level' => $cycle->level,
+            'active_cycle_id' => $program?->active_cycle_id,
+            'is_active_level' => $program !== null && (int) $program->active_cycle_id === (int) $cycle->id,
             'phase' => $cycle->phase ?? 'Initial Notice',
             'status' => $cycle->status,
             'display_status' => $cycle->display_status,
@@ -556,7 +564,22 @@ class AccreditationCycleController extends Controller
     }
 
     /**
-     * Role-scoped Level I–IV accreditation status for dashboard homes.
+     * The full ordered list of accreditation levels (e.g. Preliminary,
+     * Level I-IV). Lets the frontend stay list-driven instead of
+     * hardcoding level names/counts, so adding a future level here is
+     * enough to make it show up everywhere.
+     */
+    public function levels()
+    {
+        return response()->json([
+            'success' => true,
+            'message' => 'Accreditation levels retrieved successfully.',
+            'data' => AccreditationCycle::LEVELS,
+        ], 200);
+    }
+
+    /**
+     * Role-scoped accreditation status for dashboard homes.
      * Includes every level per visible program, not only the latest cycle.
      */
     public function levelStatus(Request $request, AccreditationLevelStatusService $service)
@@ -655,6 +678,7 @@ class AccreditationCycleController extends Controller
 
         $notifications = $user->notifications()->orderByDesc('created_at')->limit(10)->get()->map(function ($notification) {
             $data = $notification->data ?? [];
+
             return [
                 'id' => $notification->id,
                 'title' => $data['title'] ?? 'Institutional update',
@@ -665,7 +689,7 @@ class AccreditationCycleController extends Controller
             ];
         })->values();
 
-        $recentActivity = \App\Models\AuditLog::query()->orderByDesc('created_at')->limit(10)->get()->map(function ($log) {
+        $recentActivity = AuditLog::query()->orderByDesc('created_at')->limit(10)->get()->map(function ($log) {
             return [
                 'id' => $log->id,
                 'message' => $log->event ?? $log->action ?? 'System activity',

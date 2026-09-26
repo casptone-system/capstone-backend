@@ -12,13 +12,29 @@ class AccreditationCycle extends Model
     use HasFactory;
 
     /**
-     * Accreditation levels.
+     * Accreditation levels, in sequence order.
      */
     public const LEVELS = [
+        'Preliminary',
         'Level I',
         'Level II',
         'Level III',
         'Level IV',
+    ];
+
+    /**
+     * The level a program starts on / falls back to when nothing is set.
+     */
+    public const DEFAULT_LEVEL = 'Level I';
+
+    /**
+     * Levels that are never treated as "already passed" for a program,
+     * regardless of the program's current level. These stay open and
+     * selectable at all times (e.g. Preliminary can be set even for a
+     * program that has already advanced to Level II).
+     */
+    public const ALWAYS_AVAILABLE_LEVELS = [
+        'Preliminary',
     ];
 
     /**
@@ -52,6 +68,7 @@ class AccreditationCycle extends Model
 
     /**
      * Accreditation phases (deprecated, use WORKFLOW_STATUSES).
+     *
      * @deprecated Use WORKFLOW_STATUSES instead
      */
     public const PHASES = self::WORKFLOW_STATUSES;
@@ -195,7 +212,9 @@ class AccreditationCycle extends Model
     {
         $index = array_search((string) $level, self::LEVELS, true);
 
-        return $index === false ? 0 : (int) $index;
+        return $index === false
+            ? (int) array_search(self::DEFAULT_LEVEL, self::LEVELS, true)
+            : (int) $index;
     }
 
     public static function currentLevelFor(Program $program): string
@@ -208,11 +227,15 @@ class AccreditationCycle extends Model
             }
         }
 
-        return 'Level I';
+        return self::DEFAULT_LEVEL;
     }
 
     public static function isReachedFor(Program $program, string $levelName): bool
     {
+        if (in_array($levelName, self::ALWAYS_AVAILABLE_LEVELS, true)) {
+            return false;
+        }
+
         return self::rank($levelName) < self::rank(self::currentLevelFor($program));
     }
 

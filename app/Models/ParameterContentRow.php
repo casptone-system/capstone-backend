@@ -44,6 +44,16 @@ class ParameterContentRow extends Model
         return $this->hasOne(Document::class, 'content_row_id')->latestOfMany();
     }
 
+    public function comments(): HasMany
+    {
+        return $this->hasMany(ParameterRowComment::class, 'content_row_id')->orderBy('id');
+    }
+
+    public function commentReads(): HasMany
+    {
+        return $this->hasMany(ParameterRowCommentRead::class, 'content_row_id');
+    }
+
     public function isSectionHeading(): bool
     {
         $text = strtoupper(trim((string) $this->content));

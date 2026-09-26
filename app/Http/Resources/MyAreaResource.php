@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\OrgScope;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -15,6 +16,8 @@ class MyAreaResource extends JsonResource
             ? $this->members->contains(fn ($member) => (int) $member->user_id === (int) $user->id)
             : (bool) $user?->isAssignedToArea($this->resource);
         $assignmentRole = $isChair ? 'chair' : ($isMember ? 'member' : null);
+        $programId = $this->cycle?->program_id;
+        $canComment = $isChair || $isMember || ($user && $programId !== null && OrgScope::canSeeProgram($user, (int) $programId));
         $review = $this->relationLoaded('reviews')
             ? $this->reviews->sortByDesc('id')->first()
             : $this->reviews()->latest('id')->first();
@@ -36,6 +39,7 @@ class MyAreaResource extends JsonResource
             'assignmentRole' => $assignmentRole,
             'canUpload' => $isChair || $isMember,
             'canSubmit' => $canSubmit,
+            'canComment' => $canComment,
             'reviewStatus' => $reviewStatus,
             'progressPercent' => (int) ($this->progress_percent ?? 0),
             'chair' => $this->whenLoaded('chair', fn () => $this->chair ? new UserResource($this->chair) : null),

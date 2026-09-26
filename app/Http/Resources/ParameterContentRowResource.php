@@ -35,6 +35,9 @@ class ParameterContentRowResource extends JsonResource
             'document' => $document ? new DocumentResource($document) : null,
             'documents' => DocumentResource::collection($documents),
             'updatedAt' => $this->updated_at?->toDateTimeString(),
+            'commentCount' => (int) ($this->commentCount ?? 0),
+            'unreadCommentCount' => (int) ($this->unreadCommentCount ?? 0),
+            'canComment' => (bool) ($this->canComment ?? false),
         ];
     }
 }
