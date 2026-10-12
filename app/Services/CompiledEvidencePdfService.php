@@ -53,24 +53,29 @@ class CompiledEvidencePdfService
 
     public function filenameForParameter(AccreditationParameter $parameter): string
     {
-        $parameter->loadMissing('area');
+        $parameter->loadMissing(['area.cycle.program', 'contentRows.documents']);
+        $area = $parameter->area;
 
-        return $this->safeName(sprintf(
-            'ADAMS-%s-%s-compiled.pdf',
-            $parameter->area?->code ?: 'area',
-            $parameter->code ?: 'parameter'
-        ));
+        return $this->packetFilename([
+            $area?->cycle?->program?->code,
+            $area?->sidebarLabel(),
+            trim('Parameter '.(string) $parameter->code),
+            $parameter->name,
+        ], $this->includedRowLabel($parameter->contentRows));
     }
 
     public function filenameForRow(ParameterContentRow $row): string
     {
-        $row->loadMissing('parameter.area');
+        $row->loadMissing('parameter.area.cycle.program');
+        $parameter = $row->parameter;
+        $area = $parameter?->area;
 
-        return $this->safeName(sprintf(
-            'ADAMS-%s-row-%d-compiled.pdf',
-            $row->parameter?->area?->code ?: 'area',
-            $row->id
-        ));
+        return $this->packetFilename([
+            $area?->cycle?->program?->code,
+            $area?->sidebarLabel(),
+            trim('Parameter '.(string) $parameter?->code),
+            $parameter?->name,
+        ], (string) $row->content);
     }
 
     /**
@@ -92,7 +97,6 @@ class CompiledEvidencePdfService
         $parts[] = $this->coverAndIndex($parameter, $entries, $scope);
 
         foreach ($entries as $entry) {
-            $parts[] = $this->dividerPage($parameter, $entry);
             foreach ($entry['files'] as $file) {
                 $parts[] = $this->filePages($parameter, $file);
             }
@@ -183,30 +187,7 @@ class CompiledEvidencePdfService
             }
         }
         $writer->table(['#', 'Row', 'File', 'Status'], $indexRows);
-        $writer->paragraph('Following pages include a row divider, then each uploaded file in order. Non-PDF uploads appear as a print insert or image page.');
-
-        return $writer->output();
-    }
-
-    /**
-     * @param  array{row: ParameterContentRow, files: list<array{document: Document, version: DocumentVersion, label: string}>}  $entry
-     */
-    private function dividerPage(AccreditationParameter $parameter, array $entry): string
-    {
-        $writer = $this->writer($parameter);
-        $writer->title('Evidence row');
-        $writer->keyValue('Instrument', sprintf('Parameter %s: %s', $parameter->code, $parameter->name));
-        $writer->keyValue('Row', $this->excerpt((string) $entry['row']->content, 220));
-        $writer->keyValue('Files on this row', (string) count($entry['files']));
-        $writer->heading('Attached files');
-        foreach ($entry['files'] as $file) {
-            $writer->paragraph(sprintf(
-                '• %s  ·  v%s  ·  %s',
-                $file['label'],
-                $file['version']->version ?? 1,
-                $file['document']->status ?? 'Active'
-            ));
-        }
+        $writer->paragraph('Following pages include each uploaded file in order. Non-PDF uploads appear as a print insert or image page.');
 
         return $writer->output();
     }
@@ -415,11 +396,87 @@ class CompiledEvidencePdfService
         return strlen($text) > $max ? substr($text, 0, $max - 3).'...' : $text;
     }
 
-    private function safeName(string $name): string
+    /**
+     * @param  Collection<int, ParameterContentRow>  $rows
+     */
+    private function includedRowLabel(Collection $rows): string
     {
-        $name = preg_replace('/[^A-Za-z0-9._-]+/', '-', $name) ?? $name;
-        $name = trim($name, '-');
+        $names = $rows
+            ->filter(function (ParameterContentRow $row) {
+                if ($row->isSectionHeading()) {
+                    return false;
+                }
 
-        return $name !== '' ? $name : 'ADAMS-compiled-evidence.pdf';
+                if (! $row->relationLoaded('documents')) {
+                    return trim((string) $row->content) !== '';
+                }
+
+                return $row->documents->contains(
+                    fn (Document $document) => $document->status !== 'Archived'
+                );
+            })
+            ->map(fn (ParameterContentRow $row) => trim(preg_replace('/\s+/', ' ', (string) $row->content) ?? ''))
+            ->filter()
+            ->unique()
+            ->values();
+
+        return $this->excerpt($names->implode(', '), 80);
+    }
+
+    /**
+     * @param  list<string|null>  $parts
+     */
+    private function packetFilename(array $parts, ?string $rowName = null): string
+    {
+        $pieces = [];
+        foreach ($parts as $part) {
+            $stem = $this->filenameStem((string) $part);
+            if ($stem !== '') {
+                $pieces[] = $stem;
+            }
+        }
+
+        $rowStem = $this->filenameStem($this->excerpt((string) $rowName, 80));
+        $max = 170;
+
+        while ($pieces !== [] && strlen($this->joinFilename($pieces, $rowStem)) > $max) {
+            if (count($pieces) > 1) {
+                array_shift($pieces);
+
+                continue;
+            }
+
+            $room = max(12, $max - ($rowStem !== '' ? strlen($rowStem) + 1 : 0));
+            $pieces[0] = rtrim(substr($pieces[0], 0, $room), '-.');
+            break;
+        }
+
+        $stem = $this->joinFilename($pieces, $rowStem);
+        if (strlen($stem) > $max) {
+            $stem = rtrim(substr($stem, 0, $max), '-.');
+        }
+
+        return ($stem !== '' ? $stem : 'packet').'-compiled-evidence.pdf';
+    }
+
+    /**
+     * @param  list<string>  $pieces
+     */
+    private function joinFilename(array $pieces, string $rowStem): string
+    {
+        $pieces = array_values(array_filter($pieces, fn (string $piece) => $piece !== ''));
+        if ($rowStem !== '') {
+            $pieces[] = $rowStem;
+        }
+
+        return trim(implode('-', $pieces), '-.');
+    }
+
+    private function filenameStem(string $value): string
+    {
+        $stem = preg_replace('/[^A-Za-z0-9._-]+/', '-', trim($value)) ?? '';
+        $stem = preg_replace('/-+/', '-', $stem) ?? $stem;
+
+        return trim($stem, '-.');
     }
 }

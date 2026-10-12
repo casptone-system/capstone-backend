@@ -118,7 +118,12 @@ class CompiledEvidencePdfTest extends TestCase
 
         $response->assertOk();
         $this->assertStringStartsWith('application/pdf', (string) $response->headers->get('content-type'));
-        $this->assertStringContainsString('compiled.pdf', (string) $response->headers->get('content-disposition'));
+        $disposition = (string) $response->headers->get('content-disposition');
+        $this->assertStringContainsString('compiled-evidence.pdf', $disposition);
+        $this->assertStringContainsString('AREA-1', $disposition);
+        $this->assertStringContainsString('Parameter-A', $disposition);
+        $this->assertStringContainsString('Statement-of-Vision', $disposition);
+        $this->assertStringContainsString('VMGO-is-displayed', $disposition);
         $this->assertStringStartsWith('%PDF', $response->getContent());
         $this->assertStringContainsString('Compiled Evidence Packet', $response->getContent());
         $this->assertStringContainsString('ADAMS demo accreditation evidence', $response->getContent());
@@ -143,8 +148,14 @@ class CompiledEvidencePdfTest extends TestCase
         $response = $this->actingAs($member)->get("/api/parameter-rows/{$row->id}/compiled-pdf");
 
         $response->assertOk();
+        $disposition = (string) $response->headers->get('content-disposition');
+        $this->assertStringContainsString('compiled-evidence.pdf', $disposition);
+        $this->assertStringContainsString('AREA-1', $disposition);
+        $this->assertStringContainsString('Parameter-A', $disposition);
+        $this->assertStringContainsString('VMGO-is-displayed', $disposition);
         $this->assertStringStartsWith('%PDF', $response->getContent());
-        $this->assertStringContainsString('Evidence row', $response->getContent());
+        $this->assertStringNotContainsString('Evidence row', $response->getContent());
+        $this->assertStringNotContainsString('Attached files', $response->getContent());
         $this->assertStringContainsString('Jose Reyes', $response->getContent());
         $this->assertStringContainsString('Area Member', $response->getContent());
         $this->assertStringContainsString('Prepared by', $response->getContent());
@@ -182,7 +193,8 @@ class CompiledEvidencePdfTest extends TestCase
         preg_match('/\/Type\s*\/Pages\s*\/Kids\s*\[.*?\]\s*\/Count\s+(\d+)/s', $pdf, $matches);
         $pageCount = (int) ($matches[1] ?? 0);
         $this->assertGreaterThan(0, $pageCount);
-        $this->assertSame($pageCount, substr_count($pdf, 'ADAMS compiled evidence - Page '));
+        $this->assertSame(0, substr_count($pdf, 'ADAMS compiled evidence'));
+        $this->assertSame(0, substr_count($pdf, 'Page '.$pageCount.' of '.$pageCount));
         $this->assertGreaterThanOrEqual($pageCount, substr_count($pdf, 'Prepared by '));
     }
 

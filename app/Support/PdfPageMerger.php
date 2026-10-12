@@ -200,15 +200,14 @@ class PdfPageMerger
     {
         $fontId = $nextId++;
         $objects[$fontId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-        $total = count($pageIds);
 
-        foreach ($pageIds as $index => $pageId) {
+        foreach ($pageIds as $pageId) {
             if (! isset($objects[$pageId])) {
                 continue;
             }
 
             [$width] = $this->mediaBox($objects[$pageId]);
-            $stream = $this->footnoteStream($footnote, $index + 1, $total, $width);
+            $stream = $this->footnoteStream($footnote, $width);
             $streamId = $nextId++;
             $objects[$streamId] = '<< /Length '.strlen($stream)." >>\nstream\n{$stream}endstream";
             $objects[$pageId] = $this->attachStamp($objects[$pageId], $streamId, $fontId);
@@ -227,7 +226,7 @@ class PdfPageMerger
         return [595.28, 841.89];
     }
 
-    private function footnoteStream(string $text, int $page, int $total, float $width): string
+    private function footnoteStream(string $text, float $width): string
     {
         $margin = 36.0;
         $lineY = 32.0;
@@ -235,17 +234,14 @@ class PdfPageMerger
         $label = strlen($text) > 118 ? substr($text, 0, 115).'...' : $text;
 
         return sprintf(
-            "q\n0.72 0.75 0.78 RG 0.4 w %.2F %.2F m %.2F %.2F l S\nBT /FtNote 7 Tf %.2F %.2F Td (%s) Tj ET\nBT /FtNote 7 Tf %.2F %.2F Td (%s) Tj ET\nQ\n",
+            "q\n0.72 0.75 0.78 RG 0.4 w %.2F %.2F m %.2F %.2F l S\nBT /FtNote 7 Tf %.2F %.2F Td (%s) Tj ET\nQ\n",
             $margin,
             $lineY,
             $right,
             $lineY,
             $margin,
             $lineY - 11,
-            $this->escape($label),
-            $margin,
-            $lineY - 22,
-            $this->escape("ADAMS compiled evidence - Page {$page} of {$total}")
+            $this->escape($label)
         );
     }
 
