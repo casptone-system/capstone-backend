@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
             InstrumentTemplateSeeder::class,
             DemoUsersSeeder::class,
             DemoProgressSeeder::class,
+            CbapaStructureSeeder::class,
         ]);
     }
 }
