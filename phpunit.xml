@@ -29,6 +29,9 @@
         <env name="MAIL_USERNAME" value="test@example.test"/>
         <env name="MAIL_PASSWORD" value="testpass"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="AUTH_2FA_ENABLED" value="false"/>
+        <env name="AUTH_EMAIL_VERIFICATION_ENABLED" value="false"/>
+        <env name="TEAM_INVITES_ENABLED" value="false"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>

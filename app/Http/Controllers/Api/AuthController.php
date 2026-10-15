@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
+use App\Support\LoginChallenge;
+use App\Support\RoleSlug;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -71,7 +73,37 @@ class AuthController extends Controller
         ]);
     }
 
-    // DISABLED for local testing: skip email verification and login 2FA.
+    if ($this->requiresTwoFactor($user)) {
+        if ($lockout = LoginChallenge::lockoutMessage((int) $user->id)) {
+            throw ValidationException::withMessages([
+                'email' => [$lockout],
+            ]);
+        }
+
+        try {
+            $challenge = LoginChallenge::issue($user);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the verification code. Try again in a few minutes.',
+            ], 503);
+        }
+
+        $request->attributes->set('audit_event', '2fa_challenge_sent');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'A verification code was sent to your email.',
+            'data' => [
+                'challenge_token' => $challenge['challenge_token'],
+                'email' => $user->email,
+                'expires_in' => $challenge['expires_in'],
+            ],
+        ], 200);
+    }
+
+    $request->attributes->set('audit_event', 'login');
+
     return $this->issueAuthenticatedSession($user);
 }
 
@@ -82,8 +114,7 @@ class AuthController extends Controller
             'code' => ['required', 'string', 'size:6'],
         ]);
 
-        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
-        $challenge = Cache::get($cacheKey);
+        $challenge = LoginChallenge::get($validated['challenge_token']);
 
         if (! $challenge) {
             throw ValidationException::withMessages([
@@ -91,17 +122,29 @@ class AuthController extends Controller
             ]);
         }
 
-        if ((int) ($challenge['attempts'] ?? 0) >= 5) {
-            Cache::forget($cacheKey);
+        $attempts = (int) ($challenge['attempts'] ?? 0);
+        if ($attempts >= (int) config('adams.two_factor_max_attempts', 5)) {
+            LoginChallenge::forget($validated['challenge_token']);
+            LoginChallenge::lock((int) $challenge['user_id']);
+            $request->attributes->set('audit_event', '2fa_lockout');
             throw ValidationException::withMessages([
-                'code' => ['Too many invalid attempts. Please restart the login process.'],
+                'code' => [LoginChallenge::lockoutMessage((int) $challenge['user_id']) ?? 'Too many invalid codes. Please sign in again later.'],
             ]);
         }
 
-        $codeMatch = hash_equals($challenge['code_hash'], hash('sha256', $validated['code']));
-        if (! $codeMatch) {
-            $challenge['attempts'] = ((int) ($challenge['attempts'] ?? 0)) + 1;
-            Cache::put($cacheKey, $challenge, $this->getLoginChallengeTtl());
+        if (! LoginChallenge::matches($challenge, $validated['code'])) {
+            $challenge['attempts'] = $attempts + 1;
+            if ($challenge['attempts'] >= (int) config('adams.two_factor_max_attempts', 5)) {
+                LoginChallenge::forget($validated['challenge_token']);
+                LoginChallenge::lock((int) $challenge['user_id']);
+                $request->attributes->set('audit_event', '2fa_lockout');
+                throw ValidationException::withMessages([
+                    'code' => [LoginChallenge::lockoutMessage((int) $challenge['user_id']) ?? 'Too many invalid codes. Please sign in again later.'],
+                ]);
+            }
+
+            LoginChallenge::put($validated['challenge_token'], $challenge);
+            $request->attributes->set('audit_event', '2fa_failed');
 
             throw ValidationException::withMessages([
                 'code' => ['The verification code is incorrect. Please try again.'],
@@ -109,7 +152,7 @@ class AuthController extends Controller
         }
 
         $user = User::find($challenge['user_id']);
-        Cache::forget($cacheKey);
+        LoginChallenge::forget($validated['challenge_token']);
 
         if (! $user) {
             throw ValidationException::withMessages([
@@ -129,15 +172,13 @@ class AuthController extends Controller
             ]);
         }
 
+        $request->attributes->set('audit_event', '2fa_success');
+
         return $this->issueAuthenticatedSession($user);
     }
 
     private function issueAuthenticatedSession(User $user)
     {
-        if (! $user->email_verified_at) {
-            $user->forceFill(['email_verified_at' => now()])->save();
-        }
-
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
@@ -150,57 +191,30 @@ class AuthController extends Controller
         ], 200);
     }
 
-    private function createLoginChallenge(User $user): array
+    private function requiresTwoFactor(User $user): bool
     {
-        $challengeToken = Str::random(64);
-        $code = (string) random_int(100000, 999999);
-        $expiresIn = $this->getLoginChallengeTtl();
-        $cacheKey = $this->getLoginChallengeCacheKey($challengeToken);
+        if (! config('adams.two_factor_enabled')) {
+            return false;
+        }
 
-        Cache::put($cacheKey, [
-            'user_id' => $user->id,
-            'email' => $user->email,
-            'code_hash' => hash('sha256', $code),
-            'attempts' => 0,
-            'resend_count' => 0,
-        ], $expiresIn);
+        $required = array_map(
+            fn (string $role) => RoleSlug::canonicalize($role) ?? $role,
+            (array) config('adams.two_factor_roles', [])
+        );
 
-        $this->sendLoginVerificationCode($user, $code, (int) ($expiresIn / 60));
+        foreach ($user->getRoleNames() as $name) {
+            $slug = RoleSlug::canonicalize($name);
+            if ($slug && in_array($slug, $required, true)) {
+                return true;
+            }
+        }
 
-        return [
-            'challenge_token' => $challengeToken,
-            'expires_in' => $expiresIn,
-        ];
-    }
-
-    private function getLoginChallengeCacheKey(string $challengeToken): string
-    {
-        return 'login_challenge:' . $challengeToken;
-    }
-
-    private function getLoginChallengeTtl(): int
-    {
-        return 300; // 5 minutes
-    }
-
-    private function getResendCooldownSeconds(): int
-    {
-        return 30; // 30 second cooldown between resends
-    }
-
-    private function getResendIpLimitPerMinute(): int
-    {
-        return 6; // allow up to 6 resend requests per IP per minute
+        return false;
     }
 
     private function getLoginIpLimitPerMinute(): int
     {
-        return 12; // allow up to 12 login attempts per IP per minute in tests
-    }
-
-    private function sendLoginVerificationCode(User $user, string $code, int $expiresInMinutes): void
-    {
-        $user->notify(new LoginVerificationCodeNotification($code, $expiresInMinutes));
+        return 12;
     }
 
     public function resendTwoFactor(Request $request)
@@ -209,8 +223,7 @@ class AuthController extends Controller
             'challenge_token' => ['required', 'string'],
         ]);
 
-        $cacheKey = $this->getLoginChallengeCacheKey($validated['challenge_token']);
-        $challenge = Cache::get($cacheKey);
+        $challenge = LoginChallenge::get($validated['challenge_token']);
 
         if (! $challenge) {
             return response()->json([
@@ -220,74 +233,82 @@ class AuthController extends Controller
         }
 
         $resendCount = (int) ($challenge['resend_count'] ?? 0);
-        Log::debug('resendTwoFactor state', ['challenge_key' => $cacheKey, 'resend_count' => $resendCount, 'last_resend_at' => $challenge['last_resend_at'] ?? null]);
-        if ($resendCount >= 3) {
+        $maxResends = (int) config('adams.two_factor_max_resends', 3);
+        if ($resendCount >= $maxResends) {
             return response()->json([
                 'success' => false,
                 'message' => 'You have reached the maximum number of resends. Please sign in again.',
             ], 429);
         }
 
-        // Enforce a short cooldown between resends (per challenge)
         $now = now()->getTimestamp();
         $lastResend = isset($challenge['last_resend_at']) ? (int) $challenge['last_resend_at'] : 0;
-        // Defensive: if lastResend is in the future (clock skew), ignore it
         if ($lastResend > $now) {
             $lastResend = 0;
         }
 
-        // Test helper: allow advancing perceived last_resend_at via header in unit tests
-        if (app()?->runningUnitTests() && $request->headers->has('X-Test-Advance-Seconds')) {
-            $advance = (int) $request->header('X-Test-Advance-Seconds');
-            if ($advance > 0) {
-                $lastResend = $lastResend - $advance;
-            }
-        }
-        $cooldown = $this->getResendCooldownSeconds();
-        // Allow the initial resend even if a last_resend_at exists unexpectedly.
+        $cooldown = (int) config('adams.two_factor_resend_cooldown_seconds', 30);
         if ($resendCount > 0 && $lastResend && ($now - $lastResend) < $cooldown) {
             $remaining = $cooldown - ($now - $lastResend);
-            Log::debug('resendTwoFactor blocked', ['reason' => 'cooldown', 'remaining' => $remaining, 'challenge' => $cacheKey]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Please wait ' . $remaining . ' seconds before requesting another code.',
             ], 429);
         }
 
-        // IP-based global throttle: limit number of resend requests per IP per minute
-        $ip = $request->ip() ?? 'unknown'
-        ;
+        $ip = $request->ip() ?? 'unknown';
         $ipKey = 'resend_2fa_ip:' . $ip;
         $ipCount = (int) Cache::get($ipKey, 0);
-        $ipLimit = $this->getResendIpLimitPerMinute();
-        Log::debug('resendTwoFactor ip state', ['ip' => $ip, 'ipKey' => $ipKey, 'ipCount' => $ipCount, 'ipLimit' => $ipLimit]);
-        if ($ipCount >= $ipLimit) {
-            Log::debug('resendTwoFactor blocked', ['reason' => 'ip_limit', 'ip' => $ip, 'count' => $ipCount]);
+        if ($ipCount >= 6) {
             return response()->json([
                 'success' => false,
                 'message' => 'Too many resend requests from your IP address. Please wait and try again.',
             ], 429);
         }
 
-        Cache::put($ipKey, $ipCount + 1, 60);
+        $user = User::find($challenge['user_id']);
+        if (! $user) {
+            LoginChallenge::forget($validated['challenge_token']);
 
-        // Generate a new code and reset attempts
+            return response()->json([
+                'success' => false,
+                'message' => 'The login verification token is invalid. Please sign in again.',
+            ], 422);
+        }
+
+        $previousHash = $challenge['code_hash'];
         $code = (string) random_int(100000, 999999);
         $challenge['code_hash'] = hash('sha256', $code);
         $challenge['attempts'] = 0;
         $challenge['resend_count'] = $resendCount + 1;
         $challenge['last_resend_at'] = $now;
+        LoginChallenge::put($validated['challenge_token'], $challenge);
 
-        $ttl = $this->getLoginChallengeTtl();
-        Cache::put($cacheKey, $challenge, $ttl);
+        try {
+            $user->notify(new LoginVerificationCodeNotification($code, (int) max(1, (int) ceil(LoginChallenge::ttl() / 60))));
+        } catch (\Throwable $exception) {
+            $challenge['code_hash'] = $previousHash;
+            $challenge['resend_count'] = $resendCount;
+            LoginChallenge::put($validated['challenge_token'], $challenge);
+            Log::error('Login verification resend failed', [
+                'user_id' => $user->id,
+                'error' => $exception->getMessage(),
+            ]);
 
-        // Send code
-        $this->sendLoginVerificationCode(User::find($challenge['user_id']), $code, (int) ($ttl / 60));
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the verification code. Try again in a few minutes.',
+            ], 503);
+        }
+
+        Cache::put($ipKey, $ipCount + 1, 60);
+        $request->attributes->set('audit_event', '2fa_code_resent');
 
         return response()->json([
             'success' => true,
             'message' => 'Verification code resent.',
-            'expires_in' => $ttl,
+            'expires_in' => LoginChallenge::ttl(),
             'resend_count' => $challenge['resend_count'],
         ], 200);
     }
@@ -298,7 +319,19 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        $status = Password::sendResetLink($validated);
+        try {
+            $status = Password::sendResetLink($validated);
+        } catch (\Throwable $exception) {
+            Log::error('Password reset email failed', [
+                'email' => $validated['email'],
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the password reset email. Try again in a few minutes.',
+            ], 503);
+        }
 
         if ($status === Password::RESET_LINK_SENT) {
             return response()->json([
@@ -508,7 +541,33 @@ class AuthController extends Controller
             ], 200);
         }
 
-        $user->sendEmailVerificationNotification();
+        $cooldownKey = 'email_verification_resend:' . $user->id;
+        $lastSent = (int) Cache::get($cooldownKey, 0);
+        $cooldown = (int) config('adams.email_resend_cooldown_seconds', 60);
+        $elapsed = now()->getTimestamp() - $lastSent;
+        if ($lastSent && $elapsed < $cooldown) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please wait ' . ($cooldown - $elapsed) . ' seconds before requesting another verification email.',
+            ], 429);
+        }
+
+        try {
+            $user->sendEmailVerificationNotification();
+        } catch (\Throwable $exception) {
+            Log::error('Verification email failed', [
+                'user_id' => $user->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the verification email. Try again in a few minutes.',
+            ], 503);
+        }
+
+        Cache::put($cooldownKey, now()->getTimestamp(), $cooldown);
+        $request->attributes->set('audit_event', 'email_verification_sent');
 
         return response()->json([
             'success' => true,
@@ -545,6 +604,7 @@ class AuthController extends Controller
         }
 
         $user->markEmailAsVerified();
+        $request->attributes->set('audit_event', 'email_verified');
 
         return redirect()->away(rtrim($frontendUrl, '/') . '/email-verified?status=success');
     }
@@ -634,8 +694,6 @@ class AuthController extends Controller
             ]);
         }
 
-        // DISABLED for local testing: registration does not require working SMTP.
-
         // Determine name parts
         if (! isset($validated['first_name']) || ! isset($validated['last_name'])) {
             $nameParts = preg_split('/\s+/', trim($validated['name']));
@@ -683,7 +741,9 @@ class AuthController extends Controller
                 'birth_date' => $validated['birthdate'] ?? null,
                 'profile_photo' => $profilePhotoPath,
             ]);
-            $user->forceFill(['email_verified_at' => now()])->save();
+            if ($isSuperAdmin) {
+                $user->forceFill(['email_verified_at' => now()])->save();
+            }
 
             // Role assignment rules:
             // - Only authenticated Super Administrators may create accounts with an elevated role.
@@ -748,9 +808,24 @@ class AuthController extends Controller
             $responseData['token'] = $token;
         }
 
+        $message = 'Registration successful. You can sign in now.';
+        if (! $isSuperAdmin && config('adams.email_verification_enabled')) {
+            try {
+                $user->sendEmailVerificationNotification();
+                $request->attributes->set('audit_event', 'email_verification_sent');
+                $message = 'Registration successful. Check your email to verify your account, then sign in.';
+            } catch (\Throwable $exception) {
+                Log::error('Registration verification email failed', [
+                    'user_id' => $user->id,
+                    'error' => $exception->getMessage(),
+                ]);
+                $message = 'Registration successful, but we could not send the verification email. Sign in and use the resend button.';
+            }
+        }
+
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful. You can sign in now.',
+            'message' => $message,
             'data' => $responseData,
         ], 201);
     }
@@ -790,13 +865,15 @@ class AuthController extends Controller
     {
         $user = $request->user() ?? $request->user('api');
         if ($user) {
-            Log::debug('logout called', ['bearer' => $request->bearerToken(), 'user_id' => $user->id, 'current_token_id' => $user->currentAccessToken()?->id]);
+            $tokenModel = $user->currentAccessToken();
+            $tokenId = $tokenModel instanceof \Laravel\Sanctum\PersonalAccessToken ? $tokenModel->id : null;
+            Log::debug('logout called', ['bearer' => $request->bearerToken(), 'user_id' => $user->id, 'current_token_id' => $tokenId]);
             // Revoke the token used for this request
             try {
                 $deleted = false;
                 $before = $user->tokens()->count();
                 Log::debug('logout tokens before', ['count' => $before]);
-                if ($tokenModel = $user->currentAccessToken()) {
+                if ($tokenModel instanceof \Laravel\Sanctum\PersonalAccessToken) {
                     $deleted = (bool) $tokenModel->delete();
                 }
 
@@ -868,64 +945,108 @@ class AuthController extends Controller
             ], 401);
         }
 
+        if ($limited = $this->joinRateLimitResponse($request, $user)) {
+            return $limited;
+        }
+
         $validated = $request->validate([
-            'code' => ['required', 'string', 'size:6'],
+            'code' => ['required', 'string', 'size:6', 'regex:/^[A-Za-z0-9]{6}$/'],
         ]);
 
-        // First try to resolve to a Team by code
-        $code = strtoupper($validated['code']);
+        if ($this->joinRoleIsRefused($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Deans, QA, VPAA, SuperAdmins, and accreditors cannot join a program with a team code.',
+            ], 403);
+        }
 
+        if (config('adams.email_verification_enabled') && $user->email_verified_at === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Verify your email address before joining a program.',
+            ], 403);
+        }
+
+        $code = strtoupper($validated['code']);
         $team = \App\Models\Team::where('code', $code)->first();
 
-        if ($team) {
-            // Assign team and program to user
-            $user->team_id = $team->id;
-            $user->program_id = $team->program_id;
-            $user->save();
-
+        if (! $team) {
             return response()->json([
-                'success' => true,
-                'message' => 'Joined team successfully.',
-                'data' => [
-                    'code' => $code,
-                    'joined' => true,
-                    'team' => [
-                        'id' => $team->id,
-                        'name' => $team->name,
-                        'code' => $team->code,
-                        'program_id' => $team->program_id,
-                    ],
-                    'user' => new UserResource($user),
-                ],
-            ], 200);
+                'success' => false,
+                'message' => 'Invalid team code. Please check with your Program Chair or Dean.',
+            ], 404);
         }
 
-        // Fallback: try Program by code
-        $program = \App\Models\Program::where('code', $code)->first();
-
-        if ($program) {
-            $user->program_id = $program->id;
-            $user->save();
-
+        if ($team->expires_at && ! $team->expires_at->isFuture()) {
             return response()->json([
-                'success' => true,
-                'message' => 'Joined program successfully.',
-                'data' => [
-                    'code' => $code,
-                    'joined' => true,
-                    'program' => [
-                        'id' => $program->id,
-                        'name' => $program->name,
-                        'code' => $program->code,
-                    ],
-                    'user' => new UserResource($user),
-                ],
-            ], 200);
+                'success' => false,
+                'message' => 'This team code has expired. Ask your Program Chair for a new one.',
+            ], 422);
         }
+
+        if ($user->program_id && (int) $user->program_id !== (int) $team->program_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This account is already assigned to another program. A Program Chair or SuperAdmin can move you.',
+            ], 422);
+        }
+
+        $user->team_id = $team->id;
+        $user->program_id = $team->program_id;
+        $user->save();
+
+        if (! $user->isFaculty()) {
+            Role::findOrCreate(RoleSlug::FACULTY, 'web');
+            $user->assignRole(RoleSlug::FACULTY);
+        }
+
+        $request->attributes->set('audit_event', 'team_joined');
 
         return response()->json([
-            'success' => false,
-            'message' => 'Invalid invitation code. Please check with your Program Chair or Dean.',
-        ], 404);
+            'success' => true,
+            'message' => 'Joined the program as faculty.',
+            'data' => [
+                'code' => $code,
+                'joined' => true,
+                'team' => [
+                    'id' => $team->id,
+                    'name' => $team->name,
+                    'code' => $team->code,
+                    'program_id' => $team->program_id,
+                ],
+                'user' => new UserResource($user->fresh()),
+            ],
+        ], 200);
+    }
+
+    private function joinRoleIsRefused(User $user): bool
+    {
+        foreach ([RoleSlug::DEAN, RoleSlug::QA, RoleSlug::VPAA, RoleSlug::SUPERADMIN, RoleSlug::ACCREDITOR] as $role) {
+            if ($user->hasCanonicalRole($role)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function joinRateLimitResponse(Request $request, User $user): ?\Illuminate\Http\JsonResponse
+    {
+        $userKey = 'team_join_user:' . $user->id;
+        $ipKey = 'team_join_ip:' . ($request->ip() ?? 'unknown');
+        $userCount = (int) Cache::get($userKey, 0);
+        $ipCount = (int) Cache::get($ipKey, 0);
+
+        if ($userCount >= 8 || $ipCount >= 20) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many join attempts. Wait a few minutes and try again.',
+            ], 429);
+        }
+
+        Cache::put($userKey, $userCount + 1, 600);
+        Cache::put($ipKey, $ipCount + 1, 600);
+
+        return null;
     }
 }

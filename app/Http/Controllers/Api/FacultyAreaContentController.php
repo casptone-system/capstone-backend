@@ -15,6 +15,7 @@ use App\Models\ParameterRowStatus;
 use App\Models\User;
 use App\Policies\ParameterContentRowPolicy;
 use App\Services\AreaProgressService;
+use App\Services\AuditLogService;
 use App\Services\CompiledEvidencePdfService;
 use App\Services\EvidenceStorage;
 use App\Support\ActiveCycle;
@@ -345,10 +346,23 @@ class FacultyAreaContentController extends Controller
         AreaEvidenceGate::assertCanManageEvidence($request->user(), $parameterContentRow->parameter?->area);
 
         $storage = app(EvidenceStorage::class);
+        $audit = app(AuditLogService::class);
+        $user = $request->user();
+        $area = $parameterContentRow->parameter?->area;
 
         foreach ($parameterContentRow->documents as $document) {
             $this->authorize('delete', $document);
-            $storage->deleteDirectory("documents/{$document->id}");
+            if ($document->isLink() && ! $user?->isChairOfArea($area)) {
+                abort(403, 'Only the Area Chair can add or remove links.');
+            }
+        }
+
+        foreach ($parameterContentRow->documents as $document) {
+            if ($document->isLink()) {
+                $audit->record($request, 'link_removed', 'api/documents/'.$document->id);
+            } else {
+                $storage->deleteDirectory("documents/{$document->id}");
+            }
             $document->delete();
         }
 
@@ -360,7 +374,7 @@ class FacultyAreaContentController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'All files for this row were removed.',
+            'message' => 'All files and links for this row were removed.',
             'data' => new ParameterContentRowResource($parameterContentRow),
         ]);
     }
@@ -380,7 +394,7 @@ class FacultyAreaContentController extends Controller
         if ($parameterContentRow->documents->isEmpty()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Upload at least one PDF before submitting this row.',
+                'message' => 'Add at least one PDF or link before submitting this row.',
             ], 422);
         }
 

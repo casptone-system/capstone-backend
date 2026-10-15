@@ -44,8 +44,8 @@ class E2EUsersSeeder extends Seeder
                         'last_name' => $item['last_name'] ?? 'User',
                         'email' => $email,
                         'password' => Hash::make($item['password']),
-                        'email_verified_at' => now(),
                     ]);
+                    $user->forceFill(['email_verified_at' => now()])->save();
                     $this->command->info("Created user: {$email}");
                 } else {
                     $this->command->info("User exists: {$email} (id={$user->id})");
@@ -97,8 +97,8 @@ class E2EUsersSeeder extends Seeder
                 'last_name' => ucfirst($role),
                 'email' => $email,
                 'password' => Hash::make($password),
-                'email_verified_at' => now(),
             ]);
+            $user->forceFill(['email_verified_at' => now()])->save();
 
             Role::firstOrCreate(['name' => $role, 'guard_name' => 'web']);
             $user->assignRole($role);

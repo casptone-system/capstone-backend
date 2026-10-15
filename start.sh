@@ -11,4 +11,8 @@ php artisan migrate --force --no-interaction
 
 # Queue workers belong in a separate process/service:
 # php artisan queue:work --sleep=1 --tries=3 --timeout=90
-exec php artisan serve --host=0.0.0.0 --port="${PORT:-8080}"
+exec php \
+  -d upload_max_filesize=64M \
+  -d post_max_size=68M \
+  -d memory_limit=256M \
+  artisan serve --host=0.0.0.0 --port="${PORT:-8080}"

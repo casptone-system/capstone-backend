@@ -7,12 +7,14 @@ use App\Http\Resources\DocumentResource;
 use App\Http\Resources\DocumentVersionResource;
 use App\Models\AccreditationArea;
 use App\Models\Document;
+use App\Models\ParameterContentRow;
 use App\Models\User;
 use App\Notifications\DocumentUploadedNotification;
 use App\Services\AreaProgressService;
 use App\Services\EvidenceStorage;
 use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
+use App\Support\EvidenceLinkRules;
 use App\Support\ParameterRowCommentNotifier;
 use App\Support\RowCommentRoleLabel;
 use Illuminate\Http\Request;
@@ -169,6 +171,7 @@ class DocumentController extends Controller
 
         // Prepare document data (do not store the uploaded file path on the documents table)
         $documentData = collect($validated)->except(['file'])->toArray();
+        $documentData['kind'] = Document::KIND_FILE;
         $documentData['uploaded_by'] = $request->user()->id;
         $documentData['current_version'] = 1;
         $documentData['status'] = 'Active';
@@ -212,6 +215,60 @@ class DocumentController extends Controller
             'success' => true,
             'message' => 'Document uploaded successfully.',
             'data' => new DocumentResource($document->load('program', 'area', 'task', 'uploader', 'versions')),
+        ], 201);
+    }
+
+    /**
+     * Attach an evidence link to a content row. The URL is stored and never fetched.
+     */
+    public function storeLink(Request $request, ParameterContentRow $parameterContentRow)
+    {
+        $parameterContentRow->load('parameter.area.cycle');
+        $area = $parameterContentRow->parameter?->area;
+        AreaEvidenceGate::assertCanUpload($request->user(), $area);
+
+        if ($parameterContentRow->isSectionHeading()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Section headings cannot hold evidence links.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'max:'.EvidenceLinkRules::MAX_URL_LENGTH],
+            'title' => ['nullable', 'string', 'max:'.EvidenceLinkRules::MAX_TITLE_LENGTH],
+        ]);
+
+        $url = EvidenceLinkRules::normalizeUrl($validated['url']);
+        $title = EvidenceLinkRules::title($validated['title'] ?? null, $url);
+        EvidenceLinkRules::assertNotDuplicate((int) $parameterContentRow->id, $url);
+
+        if (! $area || ! $area->cycle?->program_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This row is missing program information, so the link cannot be saved.',
+            ], 422);
+        }
+
+        $document = Document::create([
+            'program_id' => $area->cycle->program_id,
+            'area_id' => $area->id,
+            'content_row_id' => $parameterContentRow->id,
+            'title' => $title,
+            'kind' => Document::KIND_LINK,
+            'url' => $url,
+            'uploaded_by' => $request->user()->id,
+            'current_version' => 1,
+            'status' => 'Active',
+        ]);
+
+        $request->attributes->set('audit_event', 'link_added');
+        app(AreaProgressService::class)->refreshForContentRow((int) $parameterContentRow->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Link added.',
+            'data' => new DocumentResource($document->load('program', 'area', 'uploader', 'versions')),
         ], 201);
     }
 
@@ -319,15 +376,22 @@ class DocumentController extends Controller
     /**
      * Remove the specified document and its files.
      */
-    public function destroy(Document $document)
+    public function destroy(Request $request, Document $document)
     {
         $this->authorize('delete', $document);
 
+        if ($document->isLink()) {
+            $document->loadMissing('contentRow.parameter.area', 'area');
+            $area = $document->area ?: $document->contentRow?->parameter?->area;
+            $this->assertChairCanManageLinks($request->user(), $area);
+            $request->attributes->set('audit_event', 'link_removed');
+        }
+
         $contentRowId = $document->content_row_id;
 
-        // Delete all stored files
-        $documentPath = "documents/{$document->id}";
-        $this->evidenceStorage->deleteDirectory($documentPath);
+        if (! $document->isLink()) {
+            $this->evidenceStorage->deleteDirectory("documents/{$document->id}");
+        }
 
         $document->delete();
 
@@ -347,6 +411,13 @@ class DocumentController extends Controller
     public function replace(Request $request, Document $document)
     {
         $this->authorize('replace', $document);
+
+        if ($document->isLink()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Links are not file versions. Remove this link and add another if the URL changed.',
+            ], 422);
+        }
 
         if ($document->area_id || $document->content_row_id) {
             $area = $document->area ?: AreaEvidenceGate::resolveArea($document->area_id, $document->content_row_id);
@@ -423,6 +494,13 @@ class DocumentController extends Controller
     {
         $this->authorize('download', $document);
 
+        if ($document->isLink()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This evidence is a link. Open it in a new browser tab.',
+            ], 422);
+        }
+
         $versionNumber = $request->get('version', $document->current_version);
 
         $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
@@ -443,6 +521,13 @@ class DocumentController extends Controller
     public function preview(Request $request, Document $document)
     {
         $this->authorize('download', $document);
+
+        if ($document->isLink()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This evidence is a link. Open it in a new browser tab.',
+            ], 422);
+        }
 
         $versionNumber = $request->get('version', $document->current_version);
         $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
@@ -486,6 +571,13 @@ class DocumentController extends Controller
      * Notify area chair and members about a newly uploaded document.
      * Excludes the uploader from receiving the notification.
      */
+    private function assertChairCanManageLinks(?User $user, ?AccreditationArea $area): void
+    {
+        if (! $user || ! $user->isChairOfArea($area)) {
+            abort(403, 'Only the Area Chair can add or remove links.');
+        }
+    }
+
     private function notifyDocumentUploaded(Document $document, User $uploader): void
     {
         $recipientIds = collect();

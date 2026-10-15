@@ -46,6 +46,15 @@ class AuditLogService
     protected function determineAction(Request $request, ?Response $response = null, ?Throwable $exception = null): string
     {
         $path = strtolower($request->path());
+        $explicit = $request->attributes->get('audit_event');
+
+        if (is_string($explicit) && $explicit !== '') {
+            return $explicit;
+        }
+
+        if ($request->isMethod('post') && preg_match('#parameter-rows/\d+/links$#', $path) === 1) {
+            return 'link_added';
+        }
 
         if ($path === 'api/login') {
             return 'login';
@@ -123,6 +132,21 @@ class AuditLogService
         }
 
         return 'warning';
+    }
+
+    public function record(Request $request, string $event, ?string $path = null): void
+    {
+        $user = $request->user();
+
+        AuditLog::create([
+            'user_id' => $user?->id,
+            'user_email' => $user?->email,
+            'event' => $event,
+            'method' => $request->method(),
+            'path' => $path ?? $request->path(),
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
     }
 
     protected function recordLoginHistory(?int $userId, ?string $email, string $status, Request $request): void

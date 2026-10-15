@@ -9,6 +9,7 @@ use App\Models\College;
 use App\Models\Program;
 use App\Models\Team;
 use App\Models\User;
+use App\Support\LoginChallenge;
 use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -487,6 +488,7 @@ class UserController extends Controller
 
             $role = Role::firstOrCreate(['name' => $slug, 'guard_name' => 'web']);
             $user->assignRole($role);
+            $user->forceFill(['email_verified_at' => now()])->save();
             $this->ensureRoleHasPermissions($role, $slug);
 
             if ($slug === RoleSlug::PROGRAM_CHAIR && ! empty($validated['program_id'])) {
@@ -744,6 +746,7 @@ class UserController extends Controller
         ]);
 
         $before = $user->toArray();
+        $emailChanged = isset($validated['email']) && strcasecmp((string) $validated['email'], (string) $user->email) !== 0;
         $requestedCollegeId = $validated['college_id'] ?? null;
         if (isset($validated['first_name'])) $user->first_name = $validated['first_name'];
         if (isset($validated['last_name'])) $user->last_name = $validated['last_name'];
@@ -800,6 +803,9 @@ class UserController extends Controller
             $this->applyRoleOrgConstraints($user, $slug, $validated);
             $newRoleName = $role->name;
         }
+        if ($emailChanged) {
+            $user->forceFill(['email_verified_at' => null]);
+        }
         $user->save();
 
         $updatedCollege = null;
@@ -820,6 +826,30 @@ class UserController extends Controller
                 }
             } catch (\Throwable $e) {
                 // Ignore notification failures so that the user update still succeeds.
+            }
+        }
+
+        if ($emailChanged) {
+            AuditLog::create([
+                'user_id' => $actor->id,
+                'user_email' => $actor->email,
+                'event' => 'EMAIL_CORRECTED',
+                'method' => 'PUT',
+                'path' => "/api/admin/users/{$id}",
+                'status' => 'success',
+                'ip_address' => $request->ip(),
+            ]);
+
+            if (config('adams.email_verification_enabled')) {
+                try {
+                    $user->sendEmailVerificationNotification();
+                } catch (\Throwable $exception) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Email updated, but we could not send the verification email. Use resend verification.',
+                        'data' => new UserResource($user->fresh()),
+                    ]);
+                }
             }
         }
 
@@ -889,8 +919,7 @@ class UserController extends Controller
         $actor = $this->ensureSuperAdmin($request);
         if (! $actor) return response()->json(['success' => false, 'message' => 'You do not have permission to lock users.'], 403);
 
-        $user = User::findOrFail($id);
-        $user->forceFill(['email_verified_at' => now()])->save();
+        User::findOrFail($id);
         AuditLog::create(['user_id' => $actor->id, 'user_email' => $actor->email, 'event' => 'ACCOUNT_LOCKED', 'method' => 'POST', 'path' => "/api/admin/users/{$id}/lock", 'status' => 'success', 'ip_address' => $request->ip()]);
 
         return response()->json(['success' => true, 'message' => 'User locked successfully.']);
@@ -941,6 +970,98 @@ class UserController extends Controller
         AuditLog::create(['user_id' => $actor->id, 'user_email' => $actor->email, 'event' => 'PASSWORD_RESET_COMPLETED', 'method' => 'POST', 'path' => "/api/admin/users/{$id}/reset-password", 'status' => 'success', 'ip_address' => $request->ip()]);
 
         return response()->json(['success' => true, 'message' => 'Password reset successfully.']);
+    }
+
+    public function markEmailVerified(Request $request, string $id)
+    {
+        $actor = $this->ensureSuperAdmin($request);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to verify users.'], 403);
+        }
+
+        $user = User::findOrFail($id);
+        $user->forceFill(['email_verified_at' => now()])->save();
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'EMAIL_MARKED_VERIFIED',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/mark-email-verified",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Email marked verified.',
+            'data' => new UserResource($user),
+        ]);
+    }
+
+    public function resendVerification(Request $request, string $id)
+    {
+        $actor = $this->ensureSuperAdmin($request);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to resend verification.'], 403);
+        }
+
+        $user = User::findOrFail($id);
+        if (! config('adams.email_verification_enabled')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Email verification is turned off.',
+            ], 409);
+        }
+
+        $previousVerifiedAt = $user->email_verified_at;
+        $user->forceFill(['email_verified_at' => null])->save();
+
+        try {
+            $user->sendEmailVerificationNotification();
+        } catch (\Throwable $exception) {
+            $user->forceFill(['email_verified_at' => $previousVerifiedAt])->save();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send the verification email. Try again in a few minutes.',
+            ], 503);
+        }
+
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'EMAIL_VERIFICATION_RESENT',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/resend-verification",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json(['success' => true, 'message' => 'Verification email sent.']);
+    }
+
+    public function resetTwoFactor(Request $request, string $id)
+    {
+        $actor = $this->ensureSuperAdmin($request);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to reset sign-in codes.'], 403);
+        }
+
+        $user = User::findOrFail($id);
+        LoginChallenge::forgetForUser((int) $user->id);
+        LoginChallenge::clearLockout((int) $user->id);
+
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'TWO_FACTOR_RESET',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/reset-2fa",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json(['success' => true, 'message' => 'Pending sign-in codes cleared.']);
     }
 
     public function roles(Request $request)

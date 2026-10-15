@@ -163,7 +163,7 @@ class ProgramController extends Controller
             $team = Team::create([
                 'name' => $program->name . ' Team',
                 'program_id' => $program->id,
-                'code' => $this->generateUniqueTeamCode(),
+                'code' => \App\Support\TeamCodes::unique(),
                 'created_by' => $request->user()->id,
             ]);
 
@@ -449,7 +449,6 @@ class ProgramController extends Controller
             'last_name' => $lastName,
             'email' => $email,
             'password' => Hash::make($password),
-            'email_verified_at' => now(),
             'program_id' => $program->id,
             'team_id' => $team->id,
             'college_id' => $program->college_id,
@@ -460,19 +459,9 @@ class ProgramController extends Controller
         }
 
         $user = User::create($userData);
+        $user->forceFill(['email_verified_at' => now()])->save();
 
         $user->assignRole($role);
-
-        // send verification / invitation email
-        try {
-            $user->sendEmailVerificationNotification();
-        } catch (\Exception $e) {
-            // If email sending fails, clean up and bubble up
-            if (! empty($data['profile_photo_path'])) {
-                \Illuminate\Support\Facades\Storage::disk('public')->delete($data['profile_photo_path']);
-            }
-            throw $e;
-        }
 
         return $user;
     }
@@ -500,15 +489,6 @@ class ProgramController extends Controller
             $code = sprintf('%s-%03d', strtoupper($base), $index);
             $index++;
         } while (Program::where('code', $code)->exists());
-
-        return $code;
-    }
-
-    private function generateUniqueTeamCode(): string
-    {
-        do {
-            $code = strtoupper(Str::random(6));
-        } while (Team::where('code', $code)->exists());
 
         return $code;
     }

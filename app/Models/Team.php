@@ -19,6 +19,10 @@ class Team extends Model
         'expires_at',
     ];
 
+    protected $casts = [
+        'expires_at' => 'datetime',
+    ];
+
     public function program(): BelongsTo
     {
         return $this->belongsTo(Program::class, 'program_id');

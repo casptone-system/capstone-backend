@@ -65,7 +65,7 @@ class AreaDocumentRules
             return;
         }
 
-        $current = Document::query()->where('content_row_id', $contentRowId)->count();
+        $current = Document::query()->where('content_row_id', $contentRowId)->files()->count();
         $max = self::maxFilesPerRow();
 
         if (($current + $incoming) > $max) {

@@ -12,6 +12,11 @@ use App\Support\SimplePdfWriter;
 use Illuminate\Support\Collection;
 use RuntimeException;
 
+/**
+ * Evidence links (documents.kind = link) cannot be fetched or printed as file
+ * pages. Each link is listed on its own placeholder page with its title and
+ * full URL. Do not omit link rows from this packet.
+ */
 class CompiledEvidencePdfService
 {
     public function __construct(
@@ -109,7 +114,7 @@ class CompiledEvidencePdfService
 
     /**
      * @param  Collection<int, ParameterContentRow>  $rows
-     * @return list<array{row: ParameterContentRow, files: list<array{document: Document, version: DocumentVersion, label: string}>}>
+     * @return list<array{row: ParameterContentRow, files: list<array{document: Document, version: ?DocumentVersion, label: string}>}>
      */
     private function entries(Collection $rows): array
     {
@@ -119,6 +124,16 @@ class CompiledEvidencePdfService
             $files = [];
             foreach ($row->documents as $document) {
                 if ($document->status === 'Archived') {
+                    continue;
+                }
+
+                if ($document->isLink()) {
+                    $files[] = [
+                        'document' => $document,
+                        'version' => null,
+                        'label' => $document->title ?: 'Evidence link',
+                    ];
+
                     continue;
                 }
 
@@ -148,7 +163,7 @@ class CompiledEvidencePdfService
     }
 
     /**
-     * @param  list<array{row: ParameterContentRow, files: list<array{document: Document, version: DocumentVersion, label: string}>}>  $entries
+     * @param  list<array{row: ParameterContentRow, files: list<array{document: Document, version: ?DocumentVersion, label: string}>}>  $entries
      */
     private function coverAndIndex(AccreditationParameter $parameter, array $entries, string $scope): string
     {
@@ -187,17 +202,25 @@ class CompiledEvidencePdfService
             }
         }
         $writer->table(['#', 'Row', 'File', 'Status'], $indexRows);
-        $writer->paragraph('Following pages include each uploaded file in order. Non-PDF uploads appear as a print insert or image page.');
+        $writer->paragraph('Following pages include each uploaded file in order. Evidence links are listed on a placeholder page with the title and full URL. Non-PDF uploads appear as a print insert or image page.');
 
         return $writer->output();
     }
 
     /**
-     * @param  array{document: Document, version: DocumentVersion, label: string}  $file
+     * @param  array{document: Document, version: ?DocumentVersion, label: string}  $file
      */
     private function filePages(AccreditationParameter $parameter, array $file): string
     {
+        if ($file['document']->isLink()) {
+            return $this->linkPlaceholder($parameter, $file['label'], (string) $file['document']->url);
+        }
+
         $version = $file['version'];
+        if (! $version) {
+            return $this->placeholder($parameter, $file['label'], 'The uploaded file could not be read from storage.');
+        }
+
         $contents = $this->storage->getContents((string) $version->file_path);
         $caption = sprintf('%s  ·  %s', $file['label'], $file['document']->status ?? '');
 
@@ -226,6 +249,20 @@ class CompiledEvidencePdfService
             $caption,
             'This file type is included in the packet as a print insert. Open the original upload from the row if you need the native file.'
         );
+    }
+
+    /**
+     * Links are never fetched. The placeholder page is the printed stand-in.
+     */
+    private function linkPlaceholder(AccreditationParameter $parameter, string $title, string $url): string
+    {
+        $writer = $this->writer($parameter);
+        $writer->title('Evidence link');
+        $writer->heading($title !== '' ? $title : 'Evidence link');
+        $writer->paragraph('This evidence is a link and cannot be printed into the PDF. It is listed here so the packet does not omit it.');
+        $writer->paragraph($url !== '' ? $url : 'No URL was stored for this link.');
+
+        return $writer->output();
     }
 
     private function placeholder(AccreditationParameter $parameter, string $title, string $message): string

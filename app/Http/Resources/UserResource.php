@@ -34,6 +34,7 @@ class UserResource extends JsonResource
             'last_name' => $this->last_name,
             'email' => $this->email,
             'emailVerifiedAt' => $this->email_verified_at?->toDateTimeString(),
+            'mustVerifyEmail' => (bool) config('adams.email_verification_enabled') && $this->email_verified_at === null,
             'phone' => $this->phone_number,
             'birthdate' => $this->birth_date,
             'profilePhoto' => $this->profile_photo ? $this->profile_photo_url : null,

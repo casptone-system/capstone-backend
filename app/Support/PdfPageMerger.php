@@ -113,6 +113,23 @@ class PdfPageMerger
      */
     private function extractObjects(string $pdf): array
     {
+        $objects = (new PdfObjectReader)->read($pdf);
+        if ($objects !== []) {
+            return $objects;
+        }
+
+        if (str_contains($pdf, 'startxref')) {
+            return [];
+        }
+
+        return $this->extractObjectsNaive($pdf);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function extractObjectsNaive(string $pdf): array
+    {
         $objects = [];
         if (! preg_match_all('/(\d+)\s+\d+\s+obj\b/', $pdf, $matches, PREG_OFFSET_CAPTURE)) {
             return [];
@@ -200,6 +217,8 @@ class PdfPageMerger
     {
         $fontId = $nextId++;
         $objects[$fontId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+        $graphicsStateId = $nextId++;
+        $objects[$graphicsStateId] = '<< /Type /ExtGState /ca 1 /CA 1 >>';
 
         foreach ($pageIds as $pageId) {
             if (! isset($objects[$pageId])) {
@@ -210,7 +229,7 @@ class PdfPageMerger
             $stream = $this->footnoteStream($footnote, $width);
             $streamId = $nextId++;
             $objects[$streamId] = '<< /Length '.strlen($stream)." >>\nstream\n{$stream}endstream";
-            $objects[$pageId] = $this->attachStamp($objects[$pageId], $streamId, $fontId);
+            $objects[$pageId] = $this->attachStamp($objects, $objects[$pageId], $streamId, $fontId, $graphicsStateId);
         }
     }
 
@@ -234,7 +253,7 @@ class PdfPageMerger
         $label = strlen($text) > 118 ? substr($text, 0, 115).'...' : $text;
 
         return sprintf(
-            "q\n0.72 0.75 0.78 RG 0.4 w %.2F %.2F m %.2F %.2F l S\nBT /FtNote 7 Tf %.2F %.2F Td (%s) Tj ET\nQ\n",
+            "q\n/FtGs gs\n0 0 0 rg\n0.35 0.38 0.42 RG\n0.6 w %.2F %.2F m %.2F %.2F l S\nBT\n0 Tr 0 Tc 0 Tw 100 Tz 0 TL 0 Ts\n/FtNote 7 Tf %.2F %.2F Td (%s) Tj\nET\nQ\n",
             $margin,
             $lineY,
             $right,
@@ -245,7 +264,10 @@ class PdfPageMerger
         );
     }
 
-    private function attachStamp(string $pageBody, int $contentId, int $fontId): string
+    /**
+     * @param  array<int, string>  $objects
+     */
+    private function attachStamp(array &$objects, string $pageBody, int $contentId, int $fontId, int $graphicsStateId): string
     {
         if (preg_match('/\/Contents\s*\[/', $pageBody)) {
             $pageBody = preg_replace(
@@ -254,10 +276,10 @@ class PdfPageMerger
                 $pageBody,
                 1
             ) ?? $pageBody;
-        } elseif (preg_match('/\/Contents\s+\d+\s+\d+\s+R/', $pageBody)) {
-            $pageBody = preg_replace(
+        } elseif (preg_match('/\/Contents\s+(\d+)\s+(\d+)\s+R/', $pageBody)) {
+            $pageBody = preg_replace_callback(
                 '/\/Contents\s+(\d+)\s+(\d+)\s+R/',
-                '/Contents [$1 $2 R '.$contentId.' 0 R]',
+                fn (array $match): string => '/Contents ['.$match[1].' '.$match[2].' R '.$contentId.' 0 R]',
                 $pageBody,
                 1
             ) ?? $pageBody;
@@ -266,24 +288,145 @@ class PdfPageMerger
         }
 
         if (preg_match('/\/Font\s*<</', $pageBody)) {
-            return preg_replace('/\/Font\s*<</', '/Font << /FtNote '.$fontId.' 0 R ', $pageBody, 1) ?? $pageBody;
-        }
-
-        if (preg_match('/\/Resources\s*<</', $pageBody)) {
-            return preg_replace(
+            $pageBody = $this->insertFootnoteFont($pageBody, $fontId);
+        } elseif (preg_match('/\/Resources\s*<</', $pageBody)) {
+            $pageBody = preg_replace(
                 '/\/Resources\s*<</',
                 '/Resources << /Font << /FtNote '.$fontId.' 0 R >> ',
                 $pageBody,
                 1
             ) ?? $pageBody;
+        } elseif (preg_match('/\/Resources\s+(\d+)\s+\d+\s+R/', $pageBody, $reference)) {
+            $resourceId = (int) $reference[1];
+            if (isset($objects[$resourceId])) {
+                $objects[$resourceId] = $this->addFootnoteFont($objects, $objects[$resourceId], $fontId);
+            }
+        } else {
+            $pageBody = preg_replace(
+                '/>>\s*$/',
+                ' /Resources << /Font << /FtNote '.$fontId.' 0 R >> >> >>',
+                $pageBody,
+                1
+            ) ?? $pageBody;
+        }
+
+        return $this->ensureGraphicsState($objects, $pageBody, $graphicsStateId);
+    }
+
+    /**
+     * @param  array<int, string>  $objects
+     */
+    private function ensureGraphicsState(array &$objects, string $pageBody, int $graphicsStateId): string
+    {
+        if (preg_match('/\/ExtGState\s*<</', $pageBody)) {
+            return $this->insertGraphicsState($pageBody, $graphicsStateId);
+        }
+
+        if (preg_match('/\/Resources\s*<</', $pageBody)) {
+            return preg_replace(
+                '/\/Resources\s*<</',
+                '/Resources << /ExtGState << /FtGs '.$graphicsStateId.' 0 R >> ',
+                $pageBody,
+                1
+            ) ?? $pageBody;
+        }
+
+        if (preg_match('/\/Resources\s+(\d+)\s+\d+\s+R/', $pageBody, $reference)) {
+            $resourceId = (int) $reference[1];
+            if (isset($objects[$resourceId])) {
+                $objects[$resourceId] = $this->addGraphicsState($objects, $objects[$resourceId], $graphicsStateId);
+            }
+        }
+
+        return $pageBody;
+    }
+
+    /**
+     * @param  array<int, string>  $objects
+     */
+    private function addGraphicsState(array &$objects, string $body, int $graphicsStateId): string
+    {
+        if (str_contains($body, '/FtGs ')) {
+            return $body;
+        }
+
+        if (preg_match('/\/ExtGState\s*<</', $body)) {
+            return $this->insertGraphicsState($body, $graphicsStateId);
+        }
+
+        if (preg_match('/\/ExtGState\s+(\d+)\s+\d+\s+R/', $body, $reference)) {
+            $stateId = (int) $reference[1];
+            if (isset($objects[$stateId]) && ! str_contains($objects[$stateId], '/FtGs ')) {
+                $objects[$stateId] = $this->insertGraphicsState($objects[$stateId], $graphicsStateId);
+            }
+
+            return $body;
+        }
+
+        return preg_replace(
+            '/<</',
+            '<< /ExtGState << /FtGs '.$graphicsStateId.' 0 R >> ',
+            $body,
+            1
+        ) ?? $body;
+    }
+
+    private function insertGraphicsState(string $body, int $graphicsStateId): string
+    {
+        if (str_contains($body, '/FtGs ')) {
+            return $body;
+        }
+
+        return preg_replace(
+            '/\/ExtGState\s*<</',
+            '/ExtGState << /FtGs '.$graphicsStateId.' 0 R ',
+            $body,
+            1
+        ) ?? $body;
+    }
+
+    /**
+     * @param  array<int, string>  $objects
+     */
+    private function addFootnoteFont(array &$objects, string $body, int $fontId): string
+    {
+        if (str_contains($body, '/FtNote ')) {
+            return $body;
+        }
+
+        if (preg_match('/\/Font\s*<</', $body)) {
+            return $this->insertFootnoteFont($body, $fontId);
+        }
+
+        if (preg_match('/\/Font\s+(\d+)\s+\d+\s+R/', $body, $reference)) {
+            $fontIdInFile = (int) $reference[1];
+            if (isset($objects[$fontIdInFile]) && ! str_contains($objects[$fontIdInFile], '/FtNote ')) {
+                $objects[$fontIdInFile] = preg_replace(
+                    '/>>\s*$/',
+                    ' /FtNote '.$fontId.' 0 R >>',
+                    $objects[$fontIdInFile],
+                    1
+                ) ?? $objects[$fontIdInFile];
+            }
+
+            return $body;
         }
 
         return preg_replace(
             '/>>\s*$/',
-            ' /Resources << /Font << /FtNote '.$fontId.' 0 R >> >> >>',
-            $pageBody,
+            ' /Font << /FtNote '.$fontId.' 0 R >> >>',
+            $body,
             1
-        ) ?? $pageBody;
+        ) ?? $body;
+    }
+
+    private function insertFootnoteFont(string $body, int $fontId): string
+    {
+        if (str_contains($body, '/FtNote ')) {
+            return $body;
+        }
+
+        return preg_replace('/\/Font\s*<</', '/Font << /FtNote '.$fontId.' 0 R ', $body, 1) ?? $body;
     }
 
     private function escape(string $text): string

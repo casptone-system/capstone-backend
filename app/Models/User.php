@@ -2,26 +2,20 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Notifications\ResetPasswordNotification;
 use App\Notifications\VerifyApiEmailNotification;
 use App\Support\RoleSlug;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Auth\MustVerifyEmail;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
-// DISABLED: Email verification ΓÇö temporarily off for dev, see [2026-08-18]
-// class User extends Authenticatable implements \Illuminate\Contracts\Auth\MustVerifyEmail
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    // DISABLED: Email verification ΓÇö temporarily off for dev, see [2026-08-18]
-    // Changed from: use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes, MustVerifyEmail;
     use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes;
 
     /**
@@ -298,10 +292,13 @@ class User extends Authenticatable
         return asset('storage/' . ltrim($this->profile_photo, '/'));
     }
 
-    // DISABLED for local testing: treat every account as verified.
     public function hasVerifiedEmail(): bool
     {
-        return true;
+        if (! config('adams.email_verification_enabled')) {
+            return true;
+        }
+
+        return $this->email_verified_at !== null;
     }
 
     public function markEmailAsVerified(): bool
@@ -313,7 +310,11 @@ class User extends Authenticatable
 
     public function sendEmailVerificationNotification(): void
     {
-        // Skipped while email verification is disabled for testing.
+        if (! config('adams.email_verification_enabled')) {
+            return;
+        }
+
+        $this->notify(new VerifyApiEmailNotification);
     }
 
     public function sendPasswordResetNotification($token): void

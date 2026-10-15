@@ -174,12 +174,12 @@ class DemoProgressSeeder extends Seeder
                     'middle_name' => null,
                     'last_name' => $account['last'],
                     'password' => DemoUsersSeeder::PASSWORD,
-                    'email_verified_at' => now(),
                     'college_id' => $program->college_id,
                     'program_id' => $program->id,
                 ]
             );
 
+            $user->forceFill(['email_verified_at' => $user->email_verified_at ?? now()])->save();
             $user->syncRoles([$role]);
             ProgramMember::query()->updateOrCreate(
                 [

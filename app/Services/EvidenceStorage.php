@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -12,6 +13,12 @@ class EvidenceStorage
     public const SOURCE_DOCUMENT_VERSION = 'document_version';
 
     public const SOURCE_ROLE_STORAGE_FILE = 'role_storage_file';
+
+    /**
+     * After the remote evidence disk fails, skip it briefly so one dead host
+     * cannot stall every later request on this process.
+     */
+    private static ?float $remoteDownUntil = null;
 
     public function diskName(): string
     {
@@ -30,22 +37,42 @@ class EvidenceStorage
 
     public function store(string $directory, UploadedFile $file): string
     {
-        return $file->store($directory, $this->diskName());
+        return $this->storeUploaded(fn (string $disk) => $file->store($directory, $disk));
     }
 
     public function putFileAs(string $directory, UploadedFile $file, string $name): string
     {
-        return $file->storeAs($directory, $name, $this->diskName());
+        return $this->storeUploaded(fn (string $disk) => $file->storeAs($directory, $name, $disk));
     }
 
     public function put(string $path, string $contents): bool
     {
-        return $this->disk()->put($path, $contents);
+        $stored = $this->tryRemote(fn () => $this->disk()->put($path, $contents));
+
+        if ($stored === true) {
+            return true;
+        }
+
+        if ($this->diskName() === 'local') {
+            return false;
+        }
+
+        return $this->localDisk()->put($path, $contents);
     }
 
     public function writeStream(string $path, $stream): bool
     {
-        return (bool) $this->disk()->writeStream($path, $stream);
+        $stored = $this->tryRemote(fn () => $this->disk()->writeStream($path, $stream));
+
+        if ($stored) {
+            return true;
+        }
+
+        if ($this->diskName() === 'local') {
+            return false;
+        }
+
+        return (bool) $this->localDisk()->writeStream($path, $stream);
     }
 
     public function exists(string $path): bool
@@ -72,7 +99,9 @@ class EvidenceStorage
      */
     public function locate(string $path): ?string
     {
-        if ($this->disk()->exists($path)) {
+        $onRemote = $this->tryRemote(fn () => $this->disk()->exists($path));
+
+        if ($onRemote === true) {
             return $this->diskName();
         }
 
@@ -91,8 +120,10 @@ class EvidenceStorage
     {
         $deleted = false;
 
-        if ($this->disk()->exists($path)) {
-            $deleted = $this->disk()->delete($path) || $deleted;
+        $onRemote = $this->tryRemote(fn () => $this->disk()->exists($path) ? $this->disk()->delete($path) : false);
+
+        if ($onRemote) {
+            $deleted = true;
         }
 
         if ($this->diskName() !== 'local' && $this->localDisk()->exists($path)) {
@@ -110,8 +141,10 @@ class EvidenceStorage
     {
         $deleted = false;
 
-        if ($this->disk()->exists($path) || method_exists($this->disk(), 'deleteDirectory')) {
-            $deleted = $this->disk()->deleteDirectory($path) || $deleted;
+        $onRemote = $this->tryRemote(fn () => $this->disk()->deleteDirectory($path));
+
+        if ($onRemote) {
+            $deleted = true;
         }
 
         if ($this->diskName() !== 'local') {
@@ -258,5 +291,73 @@ class EvidenceStorage
     public function safeFilename(string $name): string
     {
         return str_replace(['"', "\r", "\n"], '', $name);
+    }
+
+    /**
+     * @param  callable(string): string  $store
+     */
+    private function storeUploaded(callable $store): string
+    {
+        $stored = $this->tryRemote(fn () => $store($this->diskName()));
+
+        if (is_string($stored) && $stored !== '') {
+            return $stored;
+        }
+
+        if ($this->diskName() === 'local') {
+            throw new \RuntimeException('The file could not be stored.');
+        }
+
+        $fallback = $store('local');
+
+        if (! is_string($fallback) || $fallback === '') {
+            throw new \RuntimeException('The file could not be stored.');
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @template T
+     * @param  callable(): T  $operation
+     * @return T|null
+     */
+    private function tryRemote(callable $operation): mixed
+    {
+        if ($this->remoteIsSkipped()) {
+            return null;
+        }
+
+        try {
+            $result = $operation();
+            self::$remoteDownUntil = null;
+
+            return $result;
+        } catch (\Throwable $exception) {
+            if ($this->diskName() === 'local') {
+                throw $exception;
+            }
+
+            $this->rememberRemoteFailure($exception);
+
+            return null;
+        }
+    }
+
+    private function remoteIsSkipped(): bool
+    {
+        return $this->diskName() !== 'local'
+            && self::$remoteDownUntil !== null
+            && microtime(true) < self::$remoteDownUntil;
+    }
+
+    private function rememberRemoteFailure(\Throwable $exception): void
+    {
+        self::$remoteDownUntil = microtime(true) + 60;
+
+        Log::warning('Evidence disk is unreachable. New files will be stored locally until it recovers.', [
+            'disk' => $this->diskName(),
+            'error' => $exception->getMessage(),
+        ]);
     }
 }

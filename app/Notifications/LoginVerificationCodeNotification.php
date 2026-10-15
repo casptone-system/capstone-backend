@@ -2,14 +2,11 @@
 
 namespace App\Notifications;
 
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
-class LoginVerificationCodeNotification extends Notification implements ShouldQueue
+class LoginVerificationCodeNotification extends Notification
 {
-    use Queueable;
 
     private string $code;
     private int $expiresInMinutes;

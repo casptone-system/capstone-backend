@@ -267,7 +267,8 @@ class SupabaseStorageAdapter implements FilesystemAdapter
             ->withHeaders([
                 'apikey' => $this->serviceRoleKey,
             ])
-            ->timeout(60)
+            ->connectTimeout(3)
+            ->timeout(8)
             ->acceptJson();
     }
 

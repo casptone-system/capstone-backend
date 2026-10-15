@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Document;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -21,6 +22,8 @@ class DocumentResource extends JsonResource
             'taskId' => $this->task_id,
             'contentRowId' => $this->content_row_id,
             'title' => $this->title,
+            'kind' => $this->kind ?: Document::KIND_FILE,
+            'url' => $this->url,
             'description' => $this->description,
             'schoolYear' => $this->school_year,
             'uploadedBy' => $this->uploaded_by,

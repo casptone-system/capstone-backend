@@ -16,7 +16,10 @@ class AreaProgressService
 {
     /**
      * A content row is complete only when it is marked Done, has at least one
-     * uploaded file, AND every file on the row is Approved by the Program Chair.
+     * uploaded item, AND every item on the row is Approved by the Program Chair.
+     *
+     * An uploaded item is any document on the row: a PDF (kind=file) or an
+     * evidence link (kind=link). Links are not counted anywhere else.
      */
     public function refresh(?AccreditationArea $area): int
     {

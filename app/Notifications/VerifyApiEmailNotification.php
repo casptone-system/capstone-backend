@@ -3,16 +3,12 @@
 namespace App\Notifications;
 
 use Illuminate\Auth\Notifications\VerifyEmail;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
-use Illuminate\Notifications\Notification;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\URL;
 
-class VerifyApiEmailNotification extends VerifyEmail implements ShouldQueue
+class VerifyApiEmailNotification extends VerifyEmail
 {
-    use Queueable;
 
     public function toMail($notifiable)
     {

@@ -43,9 +43,9 @@ Route::middleware(['security', 'audit.api'])->group(function () {
     Route::get('/auth/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
 });
 
-Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(function () {
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/me', [AuthController::class, 'me']);
+Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.api'])->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout'])->withoutMiddleware('verified.api');
+    Route::get('/me', [AuthController::class, 'me'])->withoutMiddleware('verified.api');
     Route::get('users/me/areas', [FacultyAreaContentController::class, 'myAreas']);
     Route::get('designation-files', [DesignationFileController::class, 'index']);
     Route::get('designation-files/{designationFile}/download', [DesignationFileController::class, 'download']);
@@ -92,6 +92,7 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('parameters/{parameter}/rows', [FacultyAreaContentController::class, 'storeRow']);
     Route::patch('parameter-rows/{parameterContentRow}/status', [FacultyAreaContentController::class, 'updateStatus']);
     Route::patch('parameter-rows/{parameterContentRow}/content', [FacultyAreaContentController::class, 'updateContent']);
+    Route::post('parameter-rows/{parameterContentRow}/links', [DocumentController::class, 'storeLink']);
     Route::delete('parameter-rows/{parameterContentRow}/documents', [FacultyAreaContentController::class, 'destroyRowDocuments']);
     Route::post('parameter-rows/{parameterContentRow}/submit', [FacultyAreaContentController::class, 'submitRow']);
     Route::get('parameter-rows/{parameterContentRow}/compiled-pdf', [FacultyAreaContentController::class, 'compileRow']);
@@ -246,6 +247,9 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
     Route::post('admin/users/{id}/activate', [UserController::class, 'activate']);
     Route::post('admin/users/{id}/deactivate', [UserController::class, 'deactivate']);
     Route::post('admin/users/{id}/reset-password', [UserController::class, 'resetPassword']);
+    Route::post('admin/users/{id}/mark-email-verified', [UserController::class, 'markEmailVerified']);
+    Route::post('admin/users/{id}/resend-verification', [UserController::class, 'resendVerification']);
+    Route::post('admin/users/{id}/reset-2fa', [UserController::class, 'resetTwoFactor']);
 
     Route::get('admin/roles', [UserController::class, 'roles']);
     Route::post('admin/roles', [UserController::class, 'storeRole']);
@@ -271,6 +275,9 @@ Route::middleware(['auth:sanctum', 'security', 'rbac', 'audit.api'])->group(func
 
     // Join team using the 6-character team code
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
+    Route::post('teams/{team}/regenerate', [TeamController::class, 'regenerate']);
+    Route::post('teams/{team}/revoke', [TeamController::class, 'revoke']);
+    Route::post('teams/{team}/invite', [TeamController::class, 'invite']);
     // Teams management (Program Chairs / Admins can create teams and codes)
     Route::apiResource('teams', TeamController::class)->only(['index', 'store', 'show']);
 

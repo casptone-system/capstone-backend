@@ -51,6 +51,10 @@ class Document extends Model
         'Archived',
     ];
 
+    public const KIND_FILE = 'file';
+
+    public const KIND_LINK = 'link';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -62,6 +66,8 @@ class Document extends Model
         'task_id',
         'content_row_id',
         'title',
+        'kind',
+        'url',
         'description',
         'school_year',
         'uploaded_by',
@@ -92,6 +98,21 @@ class Document extends Model
                 ->orWhereHas('contentRow.parameter', function (Builder $parameter) use ($areaId) {
                     $parameter->where('area_id', $areaId);
                 });
+        });
+    }
+
+    public function isLink(): bool
+    {
+        return $this->kind === self::KIND_LINK;
+    }
+
+    /**
+     * PDF uploads only. Evidence links are a separate kind and do not consume the per-row PDF cap.
+     */
+    public function scopeFiles(Builder $query): Builder
+    {
+        return $query->where(function (Builder $inner) {
+            $inner->where('kind', self::KIND_FILE)->orWhereNull('kind');
         });
     }
 

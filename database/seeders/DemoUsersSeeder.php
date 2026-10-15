@@ -55,12 +55,12 @@ class DemoUsersSeeder extends Seeder
                     'middle_name' => null,
                     'last_name' => $account['last'],
                     'password' => self::PASSWORD,
-                    'email_verified_at' => now(),
                     'college_id' => $scopedToCollege || $scopedToProgram ? $college?->id : null,
                     'program_id' => $scopedToProgram ? $program?->id : null,
                 ]
             );
 
+            $user->forceFill(['email_verified_at' => $user->email_verified_at ?? now()])->save();
             $user->syncRoles([$account['role']]);
             $users[$account['role']] = $user;
             $this->command?->info("Demo user ready: {$account['email']} ({$account['role']})");
