@@ -1,10 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\AccreditorEvidenceController;
 use App\Http\Controllers\Api\AccreditationAreaController;
 use App\Http\Controllers\Api\AccreditationCycleController;
 use App\Http\Controllers\Api\AccreditationStructureController;
 use App\Http\Controllers\Api\AccreditationWorkspaceController;
 use App\Http\Controllers\Api\AuditController;
+use App\Http\Controllers\Api\BoardOfActionController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\CollegeController;
@@ -13,6 +15,7 @@ use App\Http\Controllers\Api\DesignationFileController;
 use App\Http\Controllers\Api\DeanController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\FacultyAreaContentController;
+use App\Http\Controllers\Api\FileRequestController;
 use App\Http\Controllers\Api\FacultyTaskController;
 use App\Http\Controllers\Api\InstrumentTemplateController;
 use App\Http\Controllers\Api\NotificationController;
@@ -27,6 +30,7 @@ use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskNotificationController;
 use App\Http\Controllers\Api\TeamController;
+use App\Http\Controllers\Api\UniversalFileController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -101,6 +105,11 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::post('parameter-rows/{parameterContentRow}/comments', [ParameterRowCommentController::class, 'store']);
     Route::post('parameter-rows/{parameterContentRow}/comments/read', [ParameterRowCommentController::class, 'markRead']);
     Route::get('review/areas', [FacultyAreaContentController::class, 'reviewAreas']);
+    Route::get('program-chair/accreditor-submission', [AccreditorEvidenceController::class, 'showSubmission']);
+    Route::post('program-chair/accreditor-submission', [AccreditorEvidenceController::class, 'submit']);
+    Route::get('accreditor/evidence/colleges', [AccreditorEvidenceController::class, 'colleges']);
+    Route::get('accreditor/evidence/colleges/{college}/programs', [AccreditorEvidenceController::class, 'programs']);
+    Route::get('accreditor/evidence/programs/{program}/areas', [AccreditorEvidenceController::class, 'areas']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
     Route::get('program-chair/review-documents', [AccreditationAreaController::class, 'programChairReviewDocuments']);
@@ -182,6 +191,31 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::get('qa/reports/program-readiness', [QAController::class, 'programReadinessReport']);
     Route::get('qa/reports/college-comparison', [QAController::class, 'collegeComparisonReport']);
     Route::get('qa/reports/at-risk-programs', [QAController::class, 'atRiskProgramsReport']);
+    Route::get('board-of-action/programs', [BoardOfActionController::class, 'programs']);
+    Route::get('board-of-action/mine', [BoardOfActionController::class, 'mine']);
+    Route::post('board-of-action', [BoardOfActionController::class, 'store']);
+    Route::post('board-of-action/{boardOfActionDocument}/replace', [BoardOfActionController::class, 'replace']);
+    Route::get('board-of-action/{boardOfActionDocument}/download', [BoardOfActionController::class, 'download']);
+    Route::get('board-of-action/{boardOfActionDocument}/preview', [BoardOfActionController::class, 'preview']);
+    Route::get('board-of-action/{boardOfActionDocument}', [BoardOfActionController::class, 'show']);
+    Route::delete('board-of-action/{boardOfActionDocument}', [BoardOfActionController::class, 'destroy']);
+
+    Route::get('file-requests/programs', [FileRequestController::class, 'programs']);
+    Route::get('file-requests', [FileRequestController::class, 'index']);
+    Route::post('file-requests', [FileRequestController::class, 'store']);
+    Route::post('file-requests/{fileRequest}/cancel', [FileRequestController::class, 'cancel']);
+    Route::post('file-requests/{fileRequest}/decline', [FileRequestController::class, 'decline']);
+    Route::post('file-requests/{fileRequest}/fulfill', [FileRequestController::class, 'fulfill']);
+    Route::delete('file-requests/{fileRequest}/files/{fileRequestFile}', [FileRequestController::class, 'destroyFile']);
+    Route::get('file-requests/{fileRequest}/files/{fileRequestFile}/download', [FileRequestController::class, 'download']);
+    Route::get('file-requests/{fileRequest}/files/{fileRequestFile}/preview', [FileRequestController::class, 'preview']);
+
+    Route::get('universal-files', [UniversalFileController::class, 'index']);
+    Route::post('universal-files', [UniversalFileController::class, 'store']);
+    Route::get('universal-files/{universalFile}/download', [UniversalFileController::class, 'download']);
+    Route::get('universal-files/{universalFile}/preview', [UniversalFileController::class, 'preview']);
+    Route::delete('universal-files/{universalFile}', [UniversalFileController::class, 'destroy']);
+
     Route::get('qa/accreditations', [QAController::class, 'accreditationPrograms']);
     Route::get('qa/accreditations/{cycle}', [QAController::class, 'accreditationDetail']);
 

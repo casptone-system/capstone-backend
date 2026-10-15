@@ -1,9 +1,11 @@
 <?php
 
+use Fruitcake\Cors\CorsService;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -29,4 +31,17 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson()
         );
+
+        // Thrown responses (403, 429, 500) leave the CORS middleware before it
+        // can add headers. Attach them here so the browser can read the error.
+        $exceptions->respond(function (Response $response, \Throwable $exception, Request $request) {
+            if (! $request->is('api/*') && ! $request->is('sanctum/csrf-cookie')) {
+                return $response;
+            }
+
+            $cors = app(CorsService::class);
+            $cors->setOptions((array) config('cors', []));
+
+            return $cors->addActualRequestHeaders($response, $request);
+        });
     })->create();

@@ -20,6 +20,8 @@ class ParameterContentRowResource extends JsonResource
                 ? $this->latestDocument
                 : $this->latestDocument()->with(['versions', 'uploader'])->first());
 
+        $hideComments = (bool) $request->user()?->isAccreditor();
+
         return [
             'id' => $this->id,
             'parameterId' => $this->parameter_id,
@@ -35,9 +37,9 @@ class ParameterContentRowResource extends JsonResource
             'document' => $document ? new DocumentResource($document) : null,
             'documents' => DocumentResource::collection($documents),
             'updatedAt' => $this->updated_at?->toDateTimeString(),
-            'commentCount' => (int) ($this->commentCount ?? 0),
-            'unreadCommentCount' => (int) ($this->unreadCommentCount ?? 0),
-            'canComment' => (bool) ($this->canComment ?? false),
+            'commentCount' => $hideComments ? 0 : (int) ($this->commentCount ?? 0),
+            'unreadCommentCount' => $hideComments ? 0 : (int) ($this->unreadCommentCount ?? 0),
+            'canComment' => $hideComments ? false : (bool) ($this->canComment ?? false),
         ];
     }
 }

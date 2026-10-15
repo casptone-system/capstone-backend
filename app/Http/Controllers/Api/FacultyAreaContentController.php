@@ -18,6 +18,7 @@ use App\Services\AreaProgressService;
 use App\Services\AuditLogService;
 use App\Services\CompiledEvidencePdfService;
 use App\Services\EvidenceStorage;
+use App\Support\AccreditorRelease;
 use App\Support\ActiveCycle;
 use App\Support\AreaEvidenceGate;
 use App\Support\AreaParameterCatalog;
@@ -147,8 +148,10 @@ class FacultyAreaContentController extends Controller
             ->with(['status.doneBy', 'documents.versions', 'documents.uploader'])
             ->get();
 
-        $canComment = ParameterContentRowPolicy::canAccessArea($request->user(), $parameter->area);
-        $this->attachCommentMeta($rows, $request->user(), $canComment);
+        $viewer = $request->user();
+        $canComment = $viewer && ! $viewer->isAccreditor()
+            && ParameterContentRowPolicy::canAccessArea($viewer, $parameter->area);
+        $this->attachCommentMeta($rows, $viewer, $canComment);
 
         return response()->json([
             'success' => true,
@@ -181,6 +184,10 @@ class FacultyAreaContentController extends Controller
             $query->whereHas('cycle', fn ($cycle) => $cycle->whereIn('program_id', $programIds));
         }
 
+        if ($user->isAccreditor()) {
+            $query->whereHas('cycle', fn ($cycle) => $cycle->whereNotNull('submitted_to_accreditor_at'));
+        }
+
         $areas = $query->orderBy('code')->orderBy('id')->get();
         $areas = ActiveCycle::uniqueAreasPerProgram($areas);
 
@@ -200,6 +207,16 @@ class FacultyAreaContentController extends Controller
      */
     private function attachCommentMeta(Collection $rows, ?User $user, bool $canComment): void
     {
+        if ($user?->isAccreditor()) {
+            foreach ($rows as $row) {
+                $row->setAttribute('commentCount', 0);
+                $row->setAttribute('unreadCommentCount', 0);
+                $row->setAttribute('canComment', false);
+            }
+
+            return;
+        }
+
         $ids = $rows->pluck('id');
 
         if ($ids->isEmpty() || ! $user) {
@@ -503,6 +520,14 @@ class FacultyAreaContentController extends Controller
         }
 
         if ($user->isAssignedToArea($area)) {
+            return;
+        }
+
+        if ($user->isAccreditor()) {
+            if (! AccreditorRelease::areaIsVisible($area)) {
+                abort(403, 'The program chair has not submitted this accreditation to the accreditor yet.');
+            }
+
             return;
         }
 

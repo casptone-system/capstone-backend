@@ -112,4 +112,9 @@ class Program extends Model
     {
         return $this->belongsTo(AccreditationCycle::class, 'active_cycle_id');
     }
+
+    public function boardOfActionDocuments(): HasMany
+    {
+        return $this->hasMany(BoardOfActionDocument::class)->newestFirst();
+    }
 }

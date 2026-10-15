@@ -73,7 +73,7 @@ class SupabaseStorageAdapter implements FilesystemAdapter
 
     public function read(string $path): string
     {
-        $response = $this->client()->get($this->objectUrl($path));
+        $response = $this->binaryClient()->get($this->objectUrl($path));
 
         if (! $response->successful()) {
             throw UnableToReadFile::fromLocation($path, $response->body());
@@ -84,15 +84,19 @@ class SupabaseStorageAdapter implements FilesystemAdapter
 
     public function readStream(string $path)
     {
-        $contents = $this->read($path);
-        $stream = fopen('php://temp', 'r+');
+        $response = $this->binaryClient()
+            ->withOptions(['stream' => true])
+            ->get($this->objectUrl($path));
 
-        if ($stream === false) {
-            throw UnableToReadFile::fromLocation($path, 'Unable to open a temp stream.');
+        if (! $response->successful()) {
+            throw UnableToReadFile::fromLocation($path, $response->body());
         }
 
-        fwrite($stream, $contents);
-        rewind($stream);
+        $stream = $response->toPsrResponse()->getBody()->detach();
+
+        if (! is_resource($stream)) {
+            throw UnableToReadFile::fromLocation($path, 'Unable to open the download stream.');
+        }
 
         return $stream;
     }
@@ -270,6 +274,16 @@ class SupabaseStorageAdapter implements FilesystemAdapter
             ->connectTimeout(3)
             ->timeout(8)
             ->acceptJson();
+    }
+
+    private function binaryClient(): PendingRequest
+    {
+        return Http::withToken($this->serviceRoleKey)
+            ->withHeaders([
+                'apikey' => $this->serviceRoleKey,
+            ])
+            ->connectTimeout(5)
+            ->timeout(60);
     }
 
     private function objectUrl(string $path): string

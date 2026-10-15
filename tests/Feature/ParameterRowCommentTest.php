@@ -158,7 +158,7 @@ class ParameterRowCommentTest extends TestCase
     {
         ['row' => $row] = $this->makeAreaWithRow();
 
-        foreach (['accreditor', 'qa', 'vpaa'] as $role) {
+        foreach (['qa', 'vpaa'] as $role) {
             $user = $this->userWithRole($role);
 
             $this->actingAs($user)

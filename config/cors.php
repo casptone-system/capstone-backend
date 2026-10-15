@@ -41,7 +41,7 @@ return [
 
     'exposed_headers' => ['Content-Disposition'],
 
-    'max_age' => 0,
+    'max_age' => 7200,
 
     'supports_credentials' => true,
 ];

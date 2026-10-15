@@ -52,6 +52,30 @@ class AuditLogService
             return $explicit;
         }
 
+        if (preg_match('#api/board-of-action/\d+/download$#', $path) === 1) {
+            return 'board_of_action_downloaded';
+        }
+
+        if (preg_match('#api/board-of-action/\d+/preview$#', $path) === 1) {
+            return 'board_of_action_viewed';
+        }
+
+        if (preg_match('#api/board-of-action/\d+/replace$#', $path) === 1) {
+            return 'board_of_action_replaced';
+        }
+
+        if ($request->isMethod('delete') && preg_match('#api/board-of-action/\d+$#', $path) === 1) {
+            return 'board_of_action_deleted';
+        }
+
+        if ($request->isMethod('post') && $path === 'api/board-of-action') {
+            return 'board_of_action_uploaded';
+        }
+
+        if ($request->isMethod('get') && preg_match('#api/board-of-action/\d+$#', $path) === 1) {
+            return 'board_of_action_viewed';
+        }
+
         if ($request->isMethod('post') && preg_match('#parameter-rows/\d+/links$#', $path) === 1) {
             return 'link_added';
         }

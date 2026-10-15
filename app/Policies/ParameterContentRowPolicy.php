@@ -5,17 +5,26 @@ namespace App\Policies;
 use App\Models\AccreditationArea;
 use App\Models\ParameterContentRow;
 use App\Models\User;
+use App\Support\AccreditorRelease;
 use App\Support\OrgScope;
 
 class ParameterContentRowPolicy
 {
     public function viewComments(User $user, ParameterContentRow $row): bool
     {
+        if ($user->isAccreditor()) {
+            return false;
+        }
+
         return $this->canAccess($user, $row);
     }
 
     public function comment(User $user, ParameterContentRow $row): bool
     {
+        if ($user->isAccreditor()) {
+            return false;
+        }
+
         return $this->canAccess($user, $row);
     }
 
@@ -35,6 +44,10 @@ class ParameterContentRowPolicy
     {
         if (! $user || ! $area) {
             return false;
+        }
+
+        if ($user->isAccreditor()) {
+            return AccreditorRelease::areaIsVisible($area);
         }
 
         if ($user->isAssignedToArea($area)) {

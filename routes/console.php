@@ -20,6 +20,11 @@ Schedule::command('notifications:check-area-deadlines')
     ->description('Remind Area In-Charge and members about incomplete area deadlines')
     ->withoutOverlapping();
 
+Schedule::command('notifications:check-file-request-deadlines')
+    ->dailyAt('08:00')
+    ->description('Remind recipient chairs about pending file requests that are due')
+    ->withoutOverlapping();
+
 // Local mysqldump backup. Disabled on Railway/PaaS — disk is ephemeral and
 // mysqldump is often missing. Use Railway MySQL backups instead.
 Schedule::command('database:backup --compress=gzip')

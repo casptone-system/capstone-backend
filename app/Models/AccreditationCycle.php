@@ -95,6 +95,8 @@ class AccreditationCycle extends Model
         'forwarded_by',
         'forwarded_at',
         'program_chair_id',
+        'submitted_to_accreditor_at',
+        'submitted_to_accreditor_by',
     ];
 
     /**
@@ -109,6 +111,7 @@ class AccreditationCycle extends Model
             'scheduled_visit' => 'date',
             'acknowledged_at' => 'datetime',
             'forwarded_at' => 'datetime',
+            'submitted_to_accreditor_at' => 'datetime',
         ];
     }
 
@@ -128,6 +131,11 @@ class AccreditationCycle extends Model
     public function instrument(): BelongsTo
     {
         return $this->belongsTo(AccreditationInstrument::class, 'instrument_id');
+    }
+
+    public function submittedToAccreditorBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_to_accreditor_by');
     }
 
     /**

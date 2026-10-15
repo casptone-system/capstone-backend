@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Document;
 use App\Models\User;
+use App\Support\AccreditorRelease;
 
 class DocumentPolicy
 {
@@ -13,8 +14,12 @@ class DocumentPolicy
             return true;
         }
 
-        if ($user->isQA() || $user->isVPAA() || $user->isAccreditor()) {
+        if ($user->isQA() || $user->isVPAA()) {
             return true;
+        }
+
+        if ($user->isAccreditor()) {
+            return AccreditorRelease::documentIsVisible($document);
         }
 
         if ($user->isProgramChair()) {

@@ -174,8 +174,18 @@ class EvidenceStorage
         }
 
         $disk = Storage::disk($diskName);
-        $mimeType = $mimeType ?: ($disk->mimeType($path) ?: 'application/octet-stream');
-        $size = $disk->size($path);
+        $mimeType = $mimeType ?: 'application/octet-stream';
+
+        $headers = [
+            'Content-Type' => $mimeType,
+            'Content-Disposition' => 'inline; filename="'.$this->safeFilename($name).'"',
+            'Cache-Control' => 'private, no-store, no-transform',
+            'X-Content-Type-Options' => 'nosniff',
+        ];
+
+        if (in_array($diskName, ['local', 'private'], true)) {
+            $headers['Content-Length'] = (string) $disk->size($path);
+        }
 
         return response()->stream(function () use ($disk, $path) {
             $stream = $disk->readStream($path);
@@ -189,13 +199,7 @@ class EvidenceStorage
             if (is_resource($stream)) {
                 fclose($stream);
             }
-        }, 200, [
-            'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="'.$this->safeFilename($name).'"',
-            'Content-Length' => (string) $size,
-            'Cache-Control' => 'private, no-store, no-transform',
-            'X-Content-Type-Options' => 'nosniff',
-        ]);
+        }, 200, $headers);
     }
 
     public function checksum(string $path, ?string $disk = null): string
