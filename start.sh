@@ -4,6 +4,11 @@ set -euo pipefail
 mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache
 chmod -R ug+rwx storage bootstrap/cache || true
 
+if [ -z "${APP_KEY:-}" ]; then
+  echo "APP_KEY is not set. Password reset and signed verification links will fail." >&2
+  exit 1
+fi
+
 # TiDB Cloud requires TLS. Render's CA bundle works for the public gateway.
 export MYSQL_ATTR_SSL_CA="${MYSQL_ATTR_SSL_CA:-/etc/ssl/certs/ca-certificates.crt}"
 

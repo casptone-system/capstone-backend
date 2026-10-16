@@ -363,19 +363,19 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        if ($this->isSmtpConfigInvalid()) {
+        if ($this->isMailConfigInvalid()) {
             return response()->json([
                 'success' => false,
-                'message' => 'SMTP is not configured correctly. Set MAIL_MAILER=smtp, MAIL_USERNAME, and MAIL_PASSWORD in .env using a valid Gmail address and app password.',
+                'message' => 'Mail is not configured correctly. On Render free tier use MAIL_MAILER=resend with RESEND_API_KEY. Locally you can use MAIL_MAILER=smtp with Gmail.',
             ], 422);
         }
 
         try {
             Mail::raw(
-                'This is a test email from ADAMS to confirm that SMTP is configured correctly. If you received this email, SMTP delivery is working.',
+                'This is a test email from ADAMS to confirm that mail delivery is configured correctly. If you received this email, outbound mail is working.',
                 function ($message) use ($validated) {
                     $message->to($validated['email'])
-                        ->subject('ADAMS SMTP Configuration Test');
+                        ->subject('ADAMS Mail Configuration Test');
                 }
             );
 
@@ -386,24 +386,35 @@ class AuthController extends Controller
         } catch (\Throwable $exception) {
             return response()->json([
                 'success' => false,
-                'message' => 'SMTP check failed. Please verify your mail settings and credentials.',
+                'message' => 'Mail check failed. Please verify your mail settings and credentials.',
                 'error' => $exception->getMessage(),
             ], 422);
         }
     }
 
-    private function isSmtpConfigInvalid(): bool
+    private function isMailConfigInvalid(): bool
     {
         if (app()?->runningUnitTests()) {
             return false;
         }
-        $defaultMailer = config('mail.default');
-        $username = config('mail.mailers.smtp.username');
-        $password = config('mail.mailers.smtp.password');
 
-        return $defaultMailer !== 'smtp'
-            || empty($username)
-            || empty($password)
+        $defaultMailer = (string) config('mail.default');
+
+        if ($defaultMailer === 'resend') {
+            $key = (string) config('services.resend.key', '');
+
+            return $key === '' || str_starts_with($key, 're_') === false;
+        }
+
+        if ($defaultMailer !== 'smtp') {
+            return true;
+        }
+
+        $username = (string) config('mail.mailers.smtp.username');
+        $password = (string) config('mail.mailers.smtp.password');
+
+        return $username === ''
+            || $password === ''
             || ! str_contains($username, '@')
             || str_contains($username, 'your-gmail')
             || str_contains($password, 'your-gmail')

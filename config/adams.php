@@ -13,7 +13,9 @@ $parseCsv = static function (string $value): array {
 $enabledInProduction = static function (string $key): bool {
     $raw = env($key);
     if ($raw === null || $raw === '') {
-        return env('APP_ENV') === 'production';
+        // When APP_ENV is omitted on the host, Laravel still treats the app as
+        // production. Mirror that here so auth/mail features default ON in prod.
+        return (string) env('APP_ENV', 'production') === 'production';
     }
 
     return filter_var($raw, FILTER_VALIDATE_BOOL);
