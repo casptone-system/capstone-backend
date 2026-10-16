@@ -202,6 +202,11 @@ class AuthController extends Controller
             return false;
         }
 
+        // Break-glass: superadmin always skips login OTP.
+        if ($user->isSuperAdmin()) {
+            return false;
+        }
+
         $email = strtolower(trim((string) $user->email));
         $exempt = (array) config('adams.two_factor_exempt_emails', []);
         if ($email !== '' && in_array($email, $exempt, true)) {

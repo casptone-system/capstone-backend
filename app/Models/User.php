@@ -300,6 +300,10 @@ class User extends Authenticatable
             return true;
         }
 
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
         return $this->email_verified_at !== null;
     }
 

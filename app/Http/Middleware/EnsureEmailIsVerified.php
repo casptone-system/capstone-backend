@@ -16,6 +16,11 @@ class EnsureEmailIsVerified
 
         $user = $request->user('api') ?? $request->user();
 
+        // Superadmin is break-glass and may use the system without email verification.
+        if ($user && method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+            return $next($request);
+        }
+
         if ($user && $user->email_verified_at === null) {
             return response()->json([
                 'success' => false,
