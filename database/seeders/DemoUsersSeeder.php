@@ -17,9 +17,10 @@ class DemoUsersSeeder extends Seeder
     public const PASSWORD = 'AdamsDemo2026!';
 
     /**
-     * @var list<array{role: string, email: string, first: string, last: string}>
+     * @var list<array{role: string, email: string, first: string, last: string, password?: string}>
      */
     public const ACCOUNTS = [
+        ['role' => RoleSlug::SUPERADMIN, 'email' => 'admin@example.com', 'first' => 'System', 'last' => 'Admin', 'password' => 'Password123!'],
         ['role' => RoleSlug::SUPERADMIN, 'email' => 'superadmin@isu.edu.ph', 'first' => 'Sofia', 'last' => 'Reyes'],
         ['role' => RoleSlug::VPAA, 'email' => 'vpaa@isu.edu.ph', 'first' => 'Antonio', 'last' => 'Cruz'],
         ['role' => RoleSlug::QA, 'email' => 'qa@isu.edu.ph', 'first' => 'Liza', 'last' => 'Domingo'],
@@ -54,7 +55,7 @@ class DemoUsersSeeder extends Seeder
                     'first_name' => $account['first'],
                     'middle_name' => null,
                     'last_name' => $account['last'],
-                    'password' => self::PASSWORD,
+                    'password' => $account['password'] ?? self::PASSWORD,
                     'college_id' => $scopedToCollege || $scopedToProgram ? $college?->id : null,
                     'program_id' => $scopedToProgram ? $program?->id : null,
                 ]

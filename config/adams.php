@@ -42,6 +42,14 @@ return [
         'superadmin,qa,vpaa,dean,program-chair,accreditor'
     )),
 
+    // Emails that skip the login OTP (e.g. break-glass @example.com accounts).
+    'two_factor_exempt_emails' => array_map(
+        static fn (string $email): string => strtolower($email),
+        $parseCsv((string) env('AUTH_2FA_EXEMPT_EMAILS', 'admin@example.com'))
+    ),
+
+    'institutional_email_domain' => strtolower((string) env('INSTITUTIONAL_EMAIL_DOMAIN', 'isu.edu.ph')),
+
     'two_factor_ttl_seconds' => 300,
     'two_factor_max_attempts' => 5,
     'two_factor_lockout_seconds' => 900,

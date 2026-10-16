@@ -13,7 +13,7 @@ use App\Models\User;
 use App\Notifications\AccreditationCycleNoticeNotification;
 use App\Services\AaccupStructureService;
 use App\Services\AccreditationLevelStatusService;
-use App\Services\AreaProgressService;
+use App\Services\VpaaOversightService;
 use App\Support\ActiveCycle;
 use App\Support\OrgScope;
 use App\Support\RoleGate;
@@ -484,70 +484,6 @@ class AccreditationCycleController extends Controller
     }
 
     /**
-     * @return array<string, mixed>
-     */
-    private function serializeVpaaCycle(AccreditationCycle $cycle): array
-    {
-        $program = $cycle->program;
-        $college = $program?->college;
-        $evidenceScore = $program
-            ? app(AreaProgressService::class)->programPercent($program)
-            : 0;
-
-        $riskReasons = [];
-        if ($cycle->isValidityExpired()) {
-            $riskReasons[] = 'Accreditation validity has expired';
-        }
-        if ($cycle->status === 'Internal Review') {
-            $riskReasons[] = 'Still in internal review';
-        }
-        if ($cycle->phase === 'VPAA Monitoring' || $cycle->workflow_status === 'VPAA Monitoring') {
-            $riskReasons[] = 'Awaiting VPAA monitoring';
-        }
-        if (
-            $cycle->scheduled_visit
-            && $cycle->scheduled_visit->lt(now()->startOfDay())
-            && ! in_array($cycle->status, ['Ready', 'Completed'], true)
-        ) {
-            $riskReasons[] = 'Visit date has passed while preparation is incomplete';
-        }
-
-        $daysUntilVisit = $cycle->scheduled_visit
-            ? (int) now()->startOfDay()->diffInDays($cycle->scheduled_visit, false)
-            : null;
-
-        return [
-            'id' => $cycle->id,
-            'program' => $program?->name ?? 'Unknown Program',
-            'college' => $college?->name ?? 'Unknown College',
-            'level' => $cycle->level,
-            'active_cycle_id' => $program?->active_cycle_id,
-            'is_active_level' => $program !== null && (int) $program->active_cycle_id === (int) $cycle->id,
-            'phase' => $cycle->phase ?? 'Initial Notice',
-            'status' => $cycle->status,
-            'display_status' => $cycle->display_status,
-            'workflow_status' => $cycle->workflow_status,
-            'preparation_status' => $cycle->preparation_status,
-            'validity_status' => $cycle->validity_status,
-            'scheduled_visit' => $cycle->scheduled_visit?->toDateString(),
-            'valid_until' => $cycle->valid_until?->toDateString(),
-            'accreditation_date' => $cycle->scheduled_visit?->toDateString(),
-            'deadline' => $cycle->valid_until?->toDateString(),
-            'readiness' => (int) min(100, max(0, $evidenceScore ?: ($cycle->status === 'Ready' ? 100 : 0))),
-            'readiness_label' => $cycle->readiness,
-            'evidence_completion' => $evidenceScore,
-            'days_until_visit' => $daysUntilVisit,
-            'at_risk' => $riskReasons !== [],
-            'risk' => $riskReasons[0] ?? null,
-            'risk_reasons' => $riskReasons,
-            'program_id' => $program?->id,
-            'college_id' => $college?->id,
-            'created_at' => $cycle->created_at?->toDateTimeString(),
-            'updated_at' => $cycle->updated_at?->toDateTimeString(),
-        ];
-    }
-
-    /**
      * Get the accreditation history for a specific program.
      */
     public function history(Program $program)
@@ -649,7 +585,7 @@ class AccreditationCycleController extends Controller
         ], 200);
     }
 
-    public function vpaaDashboard(Request $request)
+    public function vpaaDashboard(Request $request, VpaaOversightService $oversight)
     {
         $user = $request->user();
 
@@ -657,96 +593,31 @@ class AccreditationCycleController extends Controller
             abort(403, 'Only VPAA/DI users can access the institutional dashboard.');
         }
 
-        $cycles = ActiveCycle::uniquePerProgram(
-            AccreditationCycle::with(['program.college'])
-                ->orderByDesc('scheduled_visit')
-                ->orderByDesc('created_at')
-                ->get()
-        );
-
-        $upcoming = $cycles->filter(fn ($cycle) => $cycle->scheduled_visit)
-            ->sortBy(fn ($cycle) => $cycle->scheduled_visit)
-            ->values();
-
-        $ready = $cycles->filter(fn ($cycle) => in_array($cycle->status, ['Ready', 'Completed'], true))->values();
-
-        $accreditations = $cycles->map(fn ($cycle) => $this->serializeVpaaCycle($cycle))->values();
-
-        $atRisk = $accreditations->filter(fn ($item) => $item['at_risk'])->values();
-
-        $expiredValidity = $accreditations->filter(fn ($item) => $item['validity_status'] === 'Expired')->values();
-
-        $notifications = $user->notifications()->orderByDesc('created_at')->limit(10)->get()->map(function ($notification) {
-            $data = $notification->data ?? [];
-
-            return [
-                'id' => $notification->id,
-                'title' => $data['title'] ?? 'Institutional update',
-                'message' => $data['message'] ?? $data['title'] ?? 'Accreditation update',
-                'type' => $data['type'] ?? 'info',
-                'is_read' => (bool) $notification->read_at,
-                'created_at' => $notification->created_at?->toDateTimeString(),
-            ];
-        })->values();
-
-        $recentActivity = AuditLog::query()->orderByDesc('created_at')->limit(10)->get()->map(function ($log) {
-            return [
-                'id' => $log->id,
-                'message' => $log->event ?? $log->action ?? 'System activity',
-                'actor' => $log->actor_name ?? 'System',
-                'created_at' => $log->created_at?->toDateTimeString(),
-            ];
-        })->values();
-
-        $summary = [
-            'active_accreditations' => $cycles->count(),
-            'upcoming_accreditations' => $upcoming->count(),
-            'ready_programs' => $ready->count(),
-            'at_risk_programs' => $atRisk->count(),
-            'expired_validity' => $expiredValidity->count(),
-            'overall_readiness' => $cycles->count() > 0
-                ? (int) round($ready->count() / $cycles->count() * 100)
-                : 0,
-        ];
-
         return response()->json([
             'success' => true,
             'message' => 'VPAA dashboard data retrieved successfully.',
-            'data' => [
-                'summary' => $summary,
-                'accreditations' => $accreditations,
-                'upcoming' => $upcoming->map(fn ($cycle) => [
-                    'id' => $cycle->id,
-                    'program' => $cycle->program?->name,
-                    'program_id' => $cycle->program_id,
-                    'college' => $cycle->program?->college?->name,
-                    'level' => $cycle->level,
-                    'phase' => $cycle->phase ?? 'Initial Notice',
-                    'preparation_status' => $cycle->preparation_status,
-                    'validity_status' => $cycle->validity_status,
-                    'accreditation_date' => $cycle->scheduled_visit?->toDateString(),
-                    'scheduled_visit' => $cycle->scheduled_visit?->toDateString(),
-                    'valid_until' => $cycle->valid_until?->toDateString(),
-                    'status' => $cycle->status,
-                ])->values(),
-                'at_risk' => $atRisk->values(),
-                'readiness' => [
-                    'overall' => $summary['overall_readiness'],
-                    'programs' => $accreditations->map(fn ($item) => [
-                        'id' => $item['id'],
-                        'program' => $item['program'],
-                        'college' => $item['college'],
-                        'level' => $item['level'],
-                        'readiness' => $item['readiness'],
-                        'phase' => $item['phase'],
-                        'preparation_status' => $item['preparation_status'],
-                        'validity_status' => $item['validity_status'],
-                        'valid_until' => $item['valid_until'],
-                    ])->values(),
-                ],
-                'notifications' => $notifications,
-                'recent_activity' => $recentActivity,
-            ],
+            'data' => $oversight->dashboard($user),
+        ], 200);
+    }
+
+    public function notifyCollege(Request $request, AccreditationCycle $accreditationCycle, VpaaOversightService $oversight)
+    {
+        $user = $request->user();
+
+        if (! $user || ! $user->isVPAA()) {
+            abort(403, 'Only the VPAA/DI can send a college follow-up.');
+        }
+
+        $validated = $request->validate([
+            'message' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $result = $oversight->notifyCollege($accreditationCycle, $user, $validated['message'] ?? null);
+
+        return response()->json([
+            'success' => true,
+            'message' => $result['message'],
+            'data' => $result,
         ], 200);
     }
 }

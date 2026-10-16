@@ -6,13 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\AuditLog;
 use App\Models\College;
+use App\Models\LoginHistory;
 use App\Models\Program;
 use App\Models\Team;
 use App\Models\User;
 use App\Support\LoginChallenge;
 use App\Support\RoleSlug;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -369,7 +369,25 @@ class UserController extends Controller
             return response()->json(['success' => false, 'message' => 'You do not have permission to view users.'], 403);
         }
 
-        $query = User::query()->with(['program', 'team']);
+        $query = User::query()
+            ->select('users.*')
+            ->with(['program', 'team', 'college', 'roles'])
+            ->addSelect([
+                'last_successful_login_at' => LoginHistory::query()
+                    ->select('occurred_at')
+                    ->where('status', 'success')
+                    ->where(function ($inner) {
+                        $inner->whereColumn('login_histories.user_id', 'users.id')
+                            ->orWhereColumn('login_histories.email', 'users.email');
+                    })
+                    ->orderByDesc('occurred_at')
+                    ->limit(1),
+            ]);
+
+        // System admins manage both active and deactivated (soft-deleted) accounts.
+        if ($actor) {
+            $query->withTrashed();
+        }
 
         if ($user && $user->isDean()) {
             $collegeId = $user->college_id;
@@ -474,7 +492,7 @@ class UserController extends Controller
                 'middle_name' => $validated['middle_name'] ?? null,
                 'name' => trim(sprintf('%s %s %s', $validated['first_name'], $validated['middle_name'] ?? '', $validated['last_name'])),
                 'email' => $validated['email'],
-                'password' => Hash::make($validated['password']),
+                'password' => $validated['password'],
                 'phone_number' => $validated['phone'] ?? null,
                 'birth_date' => $validated['birthdate'] ?? null,
                 'college_id' => $validated['college_id'] ?? null,
@@ -900,7 +918,10 @@ class UserController extends Controller
         }
 
         $user = User::withTrashed()->findOrFail($id);
-        $user->restore();
+        if ($user->trashed()) {
+            $user->restore();
+        }
+
         AuditLog::create([
             'user_id' => $actor->id,
             'user_email' => $actor->email,
@@ -911,7 +932,11 @@ class UserController extends Controller
             'ip_address' => $request->ip(),
         ]);
 
-        return response()->json(['success' => true, 'message' => 'User restored successfully.']);
+        return response()->json([
+            'success' => true,
+            'message' => 'User restored successfully.',
+            'data' => new UserResource($user->fresh()),
+        ]);
     }
 
     public function lock(Request $request, string $id)
@@ -939,37 +964,100 @@ class UserController extends Controller
     public function activate(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) return response()->json(['success' => false, 'message' => 'You do not have permission to activate users.'], 403);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to activate users.'], 403);
+        }
 
-        $user = User::findOrFail($id);
-        AuditLog::create(['user_id' => $actor->id, 'user_email' => $actor->email, 'event' => 'ACCOUNT_ACTIVATED', 'method' => 'POST', 'path' => "/api/admin/users/{$id}/activate", 'status' => 'success', 'ip_address' => $request->ip()]);
+        $user = User::withTrashed()->findOrFail($id);
+        if ($user->trashed()) {
+            $user->restore();
+        }
 
-        return response()->json(['success' => true, 'message' => 'User activated successfully.']);
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'ACCOUNT_ACTIVATED',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/activate",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User activated successfully.',
+            'data' => new UserResource($user->fresh()),
+        ]);
     }
 
     public function deactivate(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) return response()->json(['success' => false, 'message' => 'You do not have permission to deactivate users.'], 403);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to deactivate users.'], 403);
+        }
 
         $user = User::findOrFail($id);
-        AuditLog::create(['user_id' => $actor->id, 'user_email' => $actor->email, 'event' => 'ACCOUNT_DEACTIVATED', 'method' => 'POST', 'path' => "/api/admin/users/{$id}/deactivate", 'status' => 'success', 'ip_address' => $request->ip()]);
+        if ($user->id === $actor->id) {
+            return response()->json(['success' => false, 'message' => 'You cannot deactivate your own account.'], 403);
+        }
 
-        return response()->json(['success' => true, 'message' => 'User deactivated successfully.']);
+        $user->delete();
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'ACCOUNT_DEACTIVATED',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/deactivate",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User deactivated successfully.',
+            'data' => new UserResource(User::withTrashed()->findOrFail($id)),
+        ]);
     }
 
     public function resetPassword(Request $request, string $id)
     {
         $actor = $this->ensureSuperAdmin($request);
-        if (! $actor) return response()->json(['success' => false, 'message' => 'You do not have permission to reset passwords.'], 403);
+        if (! $actor) {
+            return response()->json(['success' => false, 'message' => 'You do not have permission to reset passwords.'], 403);
+        }
 
-        $user = User::findOrFail($id);
-        $newPassword = $request->input('password') ?: substr(md5((string) now()->timestamp . $user->email), 0, 12);
-        $user->password = Hash::make($newPassword);
+        $validated = $request->validate([
+            'password' => ['nullable', 'string', 'min:8', 'regex:/^(?=.*[A-Z])(?=.*\d).+$/'],
+        ], [
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.regex' => 'Password must include at least one uppercase letter and one number.',
+        ]);
+
+        $user = User::withTrashed()->findOrFail($id);
+        $newPassword = $validated['password'] ?? ('Temp'.substr(bin2hex(random_bytes(4)), 0, 6).'1');
+        // User model casts password as hashed — assign plain text once.
+        $user->password = $newPassword;
         $user->save();
-        AuditLog::create(['user_id' => $actor->id, 'user_email' => $actor->email, 'event' => 'PASSWORD_RESET_COMPLETED', 'method' => 'POST', 'path' => "/api/admin/users/{$id}/reset-password", 'status' => 'success', 'ip_address' => $request->ip()]);
 
-        return response()->json(['success' => true, 'message' => 'Password reset successfully.']);
+        AuditLog::create([
+            'user_id' => $actor->id,
+            'user_email' => $actor->email,
+            'event' => 'PASSWORD_RESET_COMPLETED',
+            'method' => 'POST',
+            'path' => "/api/admin/users/{$id}/reset-password",
+            'status' => 'success',
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password reset successfully.',
+            'data' => [
+                'temporary_password' => $newPassword,
+                'user' => new UserResource($user->fresh()),
+            ],
+        ]);
     }
 
     public function markEmailVerified(Request $request, string $id)

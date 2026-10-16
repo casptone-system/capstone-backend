@@ -21,8 +21,18 @@ class AuditController extends Controller
         }
 
         $logs = AuditLog::with('details')
+            ->where('event', '!=', 'modify')
             ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->user_id))
             ->when($request->filled('user_email'), fn ($q) => $q->where('user_email', 'like', "%{$request->user_email}%"))
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $term = '%'.$request->search.'%';
+                $q->where(function ($inner) use ($term) {
+                    $inner->where('event', 'like', $term)
+                        ->orWhere('user_email', 'like', $term)
+                        ->orWhere('path', 'like', $term)
+                        ->orWhere('status', 'like', $term);
+                });
+            })
             ->when($request->filled('event'), fn ($q) => $q->where('event', $request->event))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->status))
             ->when($request->filled('path'), fn ($q) => $q->where('path', 'like', "%{$request->path}%"))
@@ -34,9 +44,12 @@ class AuditController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Audit logs retrieved successfully.',
-            'data' => AuditLogResource::collection($logs),
+            'data' => AuditLogResource::collection($logs)->resolve(),
             'meta' => [
-                'pagination' => $logs->toArray(),
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
             ],
         ], 200);
     }
@@ -59,9 +72,12 @@ class AuditController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Login history retrieved successfully.',
-            'data' => LoginHistoryResource::collection($histories),
+            'data' => LoginHistoryResource::collection($histories)->resolve(),
             'meta' => [
-                'pagination' => $histories->toArray(),
+                'current_page' => $histories->currentPage(),
+                'last_page' => $histories->lastPage(),
+                'per_page' => $histories->perPage(),
+                'total' => $histories->total(),
             ],
         ], 200);
     }

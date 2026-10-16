@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AuditLog;
 use App\Models\AuditLogDetail;
 use App\Models\LoginHistory;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -15,14 +16,33 @@ class AuditLogService
 {
     public function log(Request $request, ?Response $response = null, ?Throwable $exception = null): void
     {
+        if ($this->shouldSkip($request)) {
+            return;
+        }
+
         DB::transaction(function () use ($request, $response, $exception): void {
             $user = $request->user('api') ?? $request->user();
             $email = $request->input('email') ?? $user?->email;
             $event = $this->determineAction($request, $response, $exception);
             $status = $this->determineStatus($response, $exception);
 
-            if (in_array($event, ['login', 'logout'], true)) {
-                $this->recordLoginHistory($user?->id, $email, $status, $request);
+            if (in_array($event, ['login', 'logout', '2fa_success'], true)) {
+                $historyUser = $user;
+                if (! $historyUser && $email) {
+                    $historyUser = User::query()->where('email', $email)->first();
+                }
+
+                $historyStatus = match ($event) {
+                    'logout' => 'logout',
+                    '2fa_success' => 'success',
+                    default => $status === 'success' ? 'success' : 'failed',
+                };
+
+                $this->recordLoginHistory($historyUser?->id, $email ?? $historyUser?->email, $historyStatus, $request);
+
+                if ($historyUser && $historyStatus === 'success') {
+                    $historyUser->forceFill(['last_login_at' => now()])->save();
+                }
             }
 
             $auditLog = AuditLog::create([
@@ -171,6 +191,20 @@ class AuditLogService
             'status' => 'success',
             'ip_address' => $request->ip(),
         ]);
+    }
+
+    protected function shouldSkip(Request $request): bool
+    {
+        if (! $request->isMethod('get')) {
+            return false;
+        }
+
+        return in_array(strtolower($request->path()), [
+            'api/notifications',
+            'api/notifications/unread-count',
+            'api/task-notifications',
+            'api/task-notifications/badge-count',
+        ], true);
     }
 
     protected function recordLoginHistory(?int $userId, ?string $email, string $status, Request $request): void

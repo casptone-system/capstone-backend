@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\Program;
 use App\Models\Team;
+use App\Models\TeamJoinCode;
 
 final class TeamCodes
 {
@@ -28,6 +29,7 @@ final class TeamCodes
             $code = self::generate();
         } while (
             Team::query()->where('code', $code)->exists()
+            || TeamJoinCode::query()->where('code', $code)->exists()
             || Program::query()->where('code', $code)->exists()
         );
 

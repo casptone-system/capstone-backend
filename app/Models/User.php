@@ -32,6 +32,7 @@ class User extends Authenticatable
         'password',
         'phone_number',
         'birth_date',
+        'sex',
         'profile_photo',
         'program_id',
         'team_id',
@@ -55,6 +56,7 @@ class User extends Authenticatable
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
+        'last_login_at' => 'datetime',
         'password' => 'hashed',
     ];
 
@@ -81,6 +83,11 @@ class User extends Authenticatable
         return $this->belongsTo(College::class, 'college_id');
     }
 
+    public function loginHistories(): HasMany
+    {
+        return $this->hasMany(LoginHistory::class);
+    }
+
     /**
      * Get the task assignments for the user.
      */
@@ -105,11 +112,6 @@ class User extends Authenticatable
     public function storageFiles(): HasMany
     {
         return $this->hasMany(RoleStorageFile::class, 'user_id');
-    }
-
-    public function invitationsSent()
-    {
-        return $this->hasMany(Invitation::class, 'invited_by');
     }
 
     /**

@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
+use App\Models\ProgramMember;
+use App\Models\TeamJoinCode;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
 use App\Support\LoginChallenge;
@@ -179,6 +181,9 @@ class AuthController extends Controller
 
     private function issueAuthenticatedSession(User $user)
     {
+        $user->forceFill(['last_login_at' => now()])->save();
+        request()->setUserResolver(static fn () => $user);
+
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
@@ -194,6 +199,12 @@ class AuthController extends Controller
     private function requiresTwoFactor(User $user): bool
     {
         if (! config('adams.two_factor_enabled')) {
+            return false;
+        }
+
+        $email = strtolower(trim((string) $user->email));
+        $exempt = (array) config('adams.two_factor_exempt_emails', []);
+        if ($email !== '' && in_array($email, $exempt, true)) {
             return false;
         }
 
@@ -655,19 +666,48 @@ class AuthController extends Controller
             $profilePhotoRules = ['required', 'image', 'max:10240'];
         }
 
+        $minimumAgeDate = now()->subYears(21)->toDateString();
+        $institutionalDomain = (string) config('adams.institutional_email_domain', 'isu.edu.ph');
+        $emailRules = ['required', 'email', 'max:255', 'unique:users,email'];
+        if (! $isSuperAdmin) {
+            $emailRules[] = 'regex:/^[A-Za-z0-9._%+\-]+@'.preg_quote($institutionalDomain, '/').'$/i';
+        }
+
         try {
             $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:255'],
             'first_name' => ['required_without:name', 'string', 'max:255'],
             'last_name' => ['required_without:name', 'string', 'max:255'],
             'middle_name' => ['nullable', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
+            'email' => $emailRules,
+            'password' => $isSuperAdmin
+                ? ['required', 'string', 'min:8']
+                : ['required', 'string', 'min:8', 'regex:/^(?=.*[A-Z])(?=.*\d).+$/'],
             'password_confirmation' => ['nullable', 'string'],
-            'phone' => ['nullable', 'string', 'max:255'],
-            'birthdate' => ['nullable', 'date'],
+            'phone' => $isSuperAdmin
+                ? ['nullable', 'string', 'max:255']
+                : ['required', 'regex:/^\d{1,12}$/'],
+            'birthdate' => $isSuperAdmin
+                ? ['nullable', 'date']
+                : ['required', 'date', 'before_or_equal:'.$minimumAgeDate],
+            'sex' => $isSuperAdmin
+                ? ['nullable', 'in:male,female']
+                : ['required', 'in:male,female'],
+            'privacy_accepted' => $isSuperAdmin ? ['nullable'] : ['accepted'],
             'role' => ['sometimes', 'string'],
             'profile_photo' => $profilePhotoRules,
+        ], [
+            'email.regex' => 'Use your institutional email (@'.$institutionalDomain.').',
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.regex' => 'Password must include at least one uppercase letter and one number.',
+            'phone.required' => 'Phone number is required.',
+            'phone.regex' => 'Phone number must contain numbers only, up to 12 digits.',
+            'birthdate.required' => 'Birth date is required.',
+            'birthdate.date' => 'Enter a valid birth date.',
+            'birthdate.before_or_equal' => 'You must be at least 21 years old to register.',
+            'sex.required' => 'Sex is required.',
+            'sex.in' => 'Select Male or Female.',
+            'privacy_accepted.accepted' => 'You must agree to the Data Privacy notice before registering.',
         ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
             $errors = $e->errors();
@@ -739,6 +779,7 @@ class AuthController extends Controller
                 'password' => Hash::make($validated['password']),
                 'phone_number' => $validated['phone'] ?? null,
                 'birth_date' => $validated['birthdate'] ?? null,
+                'sex' => $validated['sex'] ?? null,
                 'profile_photo' => $profilePhotoPath,
             ]);
             if ($isSuperAdmin) {
@@ -968,38 +1009,101 @@ class AuthController extends Controller
         }
 
         $code = strtoupper($validated['code']);
-        $team = \App\Models\Team::where('code', $code)->first();
+        $result = DB::transaction(function () use ($code, $user): array {
+            $joinCode = TeamJoinCode::query()->where('code', $code)->lockForUpdate()->first();
 
-        if (! $team) {
+            if (! $joinCode) {
+                return ['status' => 'missing'];
+            }
+
+            if ($joinCode->isUsed()) {
+                return ['status' => 'used'];
+            }
+
+            if ($joinCode->isExpired()) {
+                return ['status' => 'expired'];
+            }
+
+            if ($user->program_id && (int) $user->program_id !== (int) $joinCode->program_id) {
+                return ['status' => 'other_program'];
+            }
+
+            if ($user->program_id && (int) $user->program_id === (int) $joinCode->program_id) {
+                return ['status' => 'already_member'];
+            }
+
+            $joinCode->forceFill([
+                'used_by' => $user->id,
+                'used_at' => now(),
+            ])->save();
+
+            $user->team_id = $joinCode->team_id;
+            $user->program_id = $joinCode->program_id;
+            $user->save();
+
+            if (! $user->isFaculty()) {
+                Role::findOrCreate(RoleSlug::FACULTY, 'web');
+                $user->assignRole(RoleSlug::FACULTY);
+            }
+
+            ProgramMember::query()->updateOrCreate(
+                [
+                    'program_id' => $joinCode->program_id,
+                    'user_id' => $user->id,
+                ],
+                [
+                    'role' => RoleSlug::FACULTY,
+                    'joined_at' => now(),
+                    'invited_by' => $joinCode->created_by,
+                ]
+            );
+
+            $joinCode->load('team');
+
+            return [
+                'status' => 'joined',
+                'joinCode' => $joinCode,
+            ];
+        });
+
+        if ($result['status'] === 'missing') {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid team code. Please check with your Program Chair or Dean.',
             ], 404);
         }
 
-        if ($team->expires_at && ! $team->expires_at->isFuture()) {
+        if ($result['status'] === 'used') {
+            return response()->json([
+                'success' => false,
+                'message' => 'This team code has already been used.',
+            ], 422);
+        }
+
+        if ($result['status'] === 'expired') {
             return response()->json([
                 'success' => false,
                 'message' => 'This team code has expired. Ask your Program Chair for a new one.',
             ], 422);
         }
 
-        if ($user->program_id && (int) $user->program_id !== (int) $team->program_id) {
+        if ($result['status'] === 'other_program') {
             return response()->json([
                 'success' => false,
                 'message' => 'This account is already assigned to another program. A Program Chair or SuperAdmin can move you.',
             ], 422);
         }
 
-        $user->team_id = $team->id;
-        $user->program_id = $team->program_id;
-        $user->save();
-
-        if (! $user->isFaculty()) {
-            Role::findOrCreate(RoleSlug::FACULTY, 'web');
-            $user->assignRole(RoleSlug::FACULTY);
+        if ($result['status'] === 'already_member') {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are already a member of this program.',
+            ], 422);
         }
 
+        /** @var TeamJoinCode $joinCode */
+        $joinCode = $result['joinCode'];
+        $team = $joinCode->team;
         $request->attributes->set('audit_event', 'team_joined');
 
         return response()->json([
@@ -1009,10 +1113,10 @@ class AuthController extends Controller
                 'code' => $code,
                 'joined' => true,
                 'team' => [
-                    'id' => $team->id,
-                    'name' => $team->name,
-                    'code' => $team->code,
-                    'program_id' => $team->program_id,
+                    'id' => $team?->id,
+                    'name' => $team?->name,
+                    'code' => $joinCode->code,
+                    'program_id' => $joinCode->program_id,
                 ],
                 'user' => new UserResource($user->fresh()),
             ],

@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\AccreditationArea;
 use App\Models\AccreditationParameter;
 use App\Models\ParameterContentRow;
+use App\Services\LevelInstrumentCatalog;
 
 class AreaParameterCatalog
 {
@@ -1655,7 +1656,13 @@ class AreaParameterCatalog
 
     private static function createRows(AccreditationParameter $parameter, string $areaCode, string $parameterCode): void
     {
-        foreach (self::rowsFor($areaCode, $parameterCode) as $rowIndex => $content) {
+        $parameter->loadMissing('area');
+        $custom = $parameter->area
+            ? LevelInstrumentCatalog::contentsForArea($parameter->area, $parameterCode)
+            : null;
+        $contents = $custom ?? self::rowsFor($areaCode, $parameterCode);
+
+        foreach ($contents as $rowIndex => $content) {
             ParameterContentRow::create([
                 'parameter_id' => $parameter->id,
                 'content' => $content,

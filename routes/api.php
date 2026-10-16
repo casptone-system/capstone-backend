@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\FacultyAreaContentController;
 use App\Http\Controllers\Api\FileRequestController;
 use App\Http\Controllers\Api\FacultyTaskController;
 use App\Http\Controllers\Api\InstrumentTemplateController;
+use App\Http\Controllers\Api\LevelInstrumentController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ParameterRowCommentController;
 use App\Http\Controllers\Api\ProgramActiveLevelController;
@@ -79,6 +80,7 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::post('accreditation-cycles/{accreditationCycle}/structure', [AccreditationStructureController::class, 'store']);
     Route::post('accreditation-cycles/{accreditationCycle}/dean-validate', [AccreditationCycleController::class, 'deanValidate']);
     Route::post('accreditation-cycles/{accreditationCycle}/vpaa-monitor', [AccreditationCycleController::class, 'vpaaMonitor']);
+    Route::post('accreditation-cycles/{accreditationCycle}/notify-college', [AccreditationCycleController::class, 'notifyCollege']);
     Route::apiResource('accreditation-cycles', AccreditationCycleController::class);
 
     // Accreditation Areas (CRUD + assign chair + manage members + progress)
@@ -219,6 +221,13 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::get('qa/accreditations', [QAController::class, 'accreditationPrograms']);
     Route::get('qa/accreditations/{cycle}', [QAController::class, 'accreditationDetail']);
 
+    Route::get('vpaa/instrument/areas', [LevelInstrumentController::class, 'areas']);
+    Route::get('vpaa/instrument/areas/{areaCode}/parameters', [LevelInstrumentController::class, 'parameters']);
+    Route::get('vpaa/instrument/areas/{areaCode}/parameters/{parameterCode}/rows', [LevelInstrumentController::class, 'rows']);
+    Route::post('vpaa/instrument/areas/{areaCode}/parameters/{parameterCode}/rows', [LevelInstrumentController::class, 'storeRow']);
+    Route::patch('vpaa/instrument/rows/{levelParameterRow}', [LevelInstrumentController::class, 'updateRow']);
+    Route::delete('vpaa/instrument/rows/{levelParameterRow}', [LevelInstrumentController::class, 'destroyRow']);
+
     Route::get('instrument-templates', [InstrumentTemplateController::class, 'index']);
     Route::get('instrument-templates/{instrumentTemplate}', [InstrumentTemplateController::class, 'show']);
     Route::post('instrument-templates', [InstrumentTemplateController::class, 'upsert']);
@@ -311,6 +320,8 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::post('/teams/join', [AuthController::class, 'joinTeam']);
     Route::post('teams/{team}/regenerate', [TeamController::class, 'regenerate']);
     Route::post('teams/{team}/revoke', [TeamController::class, 'revoke']);
+    Route::post('teams/{team}/codes', [TeamController::class, 'issueCode']);
+    Route::post('teams/{team}/codes/{joinCode}/revoke', [TeamController::class, 'revokeCode']);
     Route::post('teams/{team}/invite', [TeamController::class, 'invite']);
     // Teams management (Program Chairs / Admins can create teams and codes)
     Route::apiResource('teams', TeamController::class)->only(['index', 'store', 'show']);

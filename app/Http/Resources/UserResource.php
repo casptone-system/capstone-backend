@@ -25,6 +25,7 @@ class UserResource extends JsonResource
         // It is the college name when college_id is set, otherwise the program name.
         // It is no longer inferred from team/program_members fallbacks.
         $department = $college?->name ?? $program?->name;
+        $trashed = method_exists($this->resource, 'trashed') && $this->resource->trashed();
 
         return [
             'id' => $this->id,
@@ -37,6 +38,7 @@ class UserResource extends JsonResource
             'mustVerifyEmail' => (bool) config('adams.email_verification_enabled') && $this->email_verified_at === null,
             'phone' => $this->phone_number,
             'birthdate' => $this->birth_date,
+            'sex' => $this->sex,
             'profilePhoto' => $this->profile_photo ? $this->profile_photo_url : null,
             'profilePhotoPath' => $this->profile_photo,
             'role' => $primaryRole,
@@ -44,6 +46,9 @@ class UserResource extends JsonResource
             'roles' => $roles,
             'permissions' => $this->getPermissionNames(),
             'department' => $department,
+            'status' => $trashed ? 'Inactive' : 'Active',
+            'deletedAt' => $this->deleted_at?->toDateTimeString(),
+            'deleted_at' => $this->deleted_at?->toDateTimeString(),
             'college_id' => $this->college_id ?? null,
             'collegeId' => $this->college_id ?? null,
             'college' => $college ? [
@@ -61,6 +66,19 @@ class UserResource extends JsonResource
                 'name' => $program->name,
                 'code' => $program->code,
             ] : null,
+            'last_login_at' => $this->resolvedLastLogin(),
+            'created_at' => $this->created_at?->toDateTimeString(),
         ];
+    }
+
+    private function resolvedLastLogin(): ?string
+    {
+        $lastLogin = $this->last_login_at ?: ($this->last_successful_login_at ?? null);
+
+        if ($lastLogin instanceof \DateTimeInterface) {
+            return $lastLogin->format('Y-m-d H:i:s');
+        }
+
+        return $lastLogin ? (string) $lastLogin : null;
     }
 }

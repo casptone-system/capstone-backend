@@ -15,7 +15,6 @@ class TaskNotification extends Model
         'description',
         'type',
         'is_welcome_task',
-        'invitation_id',
         'status',
         'related_id',
         'related_model',
@@ -49,14 +48,6 @@ class TaskNotification extends Model
     public function assignedTo(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assigned_to_id');
-    }
-
-    /**
-     * Get the invitation this task is related to
-     */
-    public function invitation(): BelongsTo
-    {
-        return $this->belongsTo(Invitation::class);
     }
 
     /**

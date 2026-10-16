@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Team;
+use App\Models\TeamJoinCode;
 use App\Models\User;
 use App\Notifications\TeamCodeInviteNotification;
 use App\Support\OrgScope;
@@ -19,7 +20,7 @@ class TeamController extends Controller
         $user = $request->user('api') ?? $request->user();
         abort_unless($user, 401);
 
-        $query = Team::with(['program', 'creator'])
+        $query = Team::with(['program', 'creator', 'joinCodes.usedBy'])
             ->orderByDesc('created_at');
         OrgScope::constrainPrograms($query, $user);
 
@@ -28,11 +29,14 @@ class TeamController extends Controller
             $query->where('program_id', $request->program_id);
         }
 
-        $teams = $query->get()->map(function (Team $team): array {
+        $teams = $query->get();
+        $programMembers = $this->currentProgramMembers($teams->pluck('program_id')->filter()->unique()->all());
+
+        $teams = $teams->map(function (Team $team) use ($programMembers): array {
             $members = $team->members()->get()->map(function ($member): array {
                 return [
                     'id' => $member->id,
-                    'name' => trim(($member->first_name ?? '') . ' ' . ($member->last_name ?? '')) ?: $member->name,
+                    'name' => $this->personName($member),
                     'email' => $member->email,
                 ];
             })->values();
@@ -52,7 +56,9 @@ class TeamController extends Controller
                     'code' => $team->program->code,
                 ] : null,
                 'members' => $members,
-                'member_count' => $members->count(),
+                'member_count' => $programMembers->get((string) $team->program_id, collect())->count(),
+                'program_members' => $programMembers->get((string) $team->program_id, collect())->values(),
+                'join_codes' => $team->joinCodes->map(fn (TeamJoinCode $joinCode): array => $this->joinCodePayload($joinCode))->values(),
                 'area' => 'Unassigned',
                 'status' => 'Active',
                 'statusClass' => 'ts-active',
@@ -98,6 +104,8 @@ class TeamController extends Controller
             'expires_at' => $validated['expires_at'] ?? null,
         ]);
 
+        $joinCode = $this->storeJoinCode($team, $user, $code);
+
         $request->attributes->set('audit_event', 'team_code_created');
 
         return response()->json([
@@ -106,14 +114,17 @@ class TeamController extends Controller
             'data' => [
                 'id' => $team->id,
                 'name' => $team->name,
-                'code' => $team->code,
+                'code' => $joinCode->code,
+                'join_code_id' => $joinCode->id,
                 'program_id' => $team->program_id,
                 'created_by' => $team->created_by,
-                'expires_at' => $team->expires_at,
+                'expires_at' => $joinCode->expires_at,
                 'created_at' => $team->created_at,
                 'updated_at' => $team->updated_at,
                 'members' => [],
                 'member_count' => 0,
+                'program_members' => [],
+                'join_codes' => [$this->joinCodePayload($joinCode)],
                 'area' => 'Unassigned',
                 'status' => 'Active',
                 'statusClass' => 'ts-active',
@@ -165,8 +176,19 @@ class TeamController extends Controller
             return response()->json(['success' => false, 'message' => 'You cannot change this team code.'], 403);
         }
 
+        $previousCode = $team->code;
+        $nextCode = TeamCodes::unique();
+
+        TeamJoinCode::query()
+            ->where('team_id', $team->id)
+            ->where('code', $previousCode)
+            ->whereNull('used_by')
+            ->update(['expires_at' => now()]);
+
+        $this->storeJoinCode($team, $user, $nextCode);
+
         $team->forceFill([
-            'code' => TeamCodes::unique(),
+            'code' => $nextCode,
             'expires_at' => null,
         ])->save();
 
@@ -187,12 +209,71 @@ class TeamController extends Controller
         }
 
         $team->forceFill(['expires_at' => now()])->save();
+        TeamJoinCode::query()
+            ->where('team_id', $team->id)
+            ->where('code', $team->code)
+            ->whereNull('used_by')
+            ->update(['expires_at' => now()]);
         $request->attributes->set('audit_event', 'team_code_revoked');
 
         return response()->json([
             'success' => true,
             'message' => 'Team code revoked.',
             'data' => $this->teamPayload($team->fresh()),
+        ], 200);
+    }
+
+    public function issueCode(Request $request, Team $team)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! $this->canManageCode($user, $team)) {
+            return response()->json(['success' => false, 'message' => 'You cannot create a team code.'], 403);
+        }
+
+        $joinCode = $this->storeJoinCode($team, $user);
+        $team->forceFill([
+            'code' => $joinCode->code,
+            'expires_at' => null,
+        ])->save();
+
+        $request->attributes->set('audit_event', 'team_code_created');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Team code generated.',
+            'data' => $this->joinCodePayload($joinCode),
+        ], 201);
+    }
+
+    public function revokeCode(Request $request, Team $team, TeamJoinCode $joinCode)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user || ! $this->canManageCode($user, $team)) {
+            return response()->json(['success' => false, 'message' => 'You cannot revoke this team code.'], 403);
+        }
+
+        if ((int) $joinCode->team_id !== (int) $team->id) {
+            abort(404);
+        }
+
+        if ($joinCode->isUsed()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This team code has already been used.',
+            ], 422);
+        }
+
+        $joinCode->forceFill(['expires_at' => now()])->save();
+        if ($team->code === $joinCode->code) {
+            $team->forceFill(['expires_at' => now()])->save();
+        }
+
+        $request->attributes->set('audit_event', 'team_code_revoked');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Team code revoked.',
+            'data' => $this->joinCodePayload($joinCode->fresh()),
         ], 200);
     }
 
@@ -217,6 +298,22 @@ class TeamController extends Controller
             ], 422);
         }
 
+        $activeJoinCode = TeamJoinCode::query()
+            ->where('team_id', $team->id)
+            ->whereNull('used_by')
+            ->where('expires_at', '>', now())
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $activeJoinCode) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This team code has expired. Generate a new one before sending it.',
+            ], 422);
+        }
+
+        $codeToEmail = $activeJoinCode->code;
+
         $validated = $request->validate([
             'email' => ['required', 'email', 'max:255'],
         ]);
@@ -234,7 +331,7 @@ class TeamController extends Controller
 
         try {
             \Illuminate\Support\Facades\Notification::route('mail', $validated['email'])
-                ->notify(new TeamCodeInviteNotification($team->code, $programName));
+                ->notify(new TeamCodeInviteNotification($codeToEmail, $programName));
         } catch (\Throwable $exception) {
             Log::error('Team code invite email failed', [
                 'team_id' => $team->id,
@@ -255,7 +352,7 @@ class TeamController extends Controller
             'message' => 'Team code emailed.',
             'data' => [
                 'email' => $validated['email'],
-                'code' => $team->code,
+                'code' => $codeToEmail,
             ],
         ], 200);
     }
@@ -291,5 +388,78 @@ class TeamController extends Controller
             'program_id' => $team->program_id,
             'expires_at' => $team->expires_at,
         ];
+    }
+
+    private function storeJoinCode(Team $team, User $user, ?string $code = null): TeamJoinCode
+    {
+        return TeamJoinCode::query()->create([
+            'team_id' => $team->id,
+            'program_id' => $team->program_id,
+            'code' => $code ?: TeamCodes::unique(),
+            'created_by' => $user->id,
+            'expires_at' => now()->addMinutes(TeamJoinCode::TTL_MINUTES),
+        ]);
+    }
+
+    private function joinCodePayload(TeamJoinCode $joinCode): array
+    {
+        $usedBy = $joinCode->relationLoaded('usedBy') ? $joinCode->usedBy : $joinCode->usedBy()->first();
+
+        return [
+            'id' => $joinCode->id,
+            'code' => $joinCode->code,
+            'team_id' => $joinCode->team_id,
+            'program_id' => $joinCode->program_id,
+            'expires_at' => $joinCode->expires_at,
+            'created_at' => $joinCode->created_at,
+            'used_at' => $joinCode->used_at,
+            'used_by' => $usedBy ? [
+                'id' => $usedBy->id,
+                'name' => $this->personName($usedBy),
+                'email' => $usedBy->email,
+            ] : null,
+            'status' => $joinCode->isUsed() ? 'used' : ($joinCode->isExpired() ? 'expired' : 'active'),
+        ];
+    }
+
+    /**
+     * @param  list<int|string>  $programIds
+     */
+    private function currentProgramMembers(array $programIds): \Illuminate\Support\Collection
+    {
+        if ($programIds === []) {
+            return collect();
+        }
+
+        return User::query()
+            ->whereIn('program_id', $programIds)
+            ->with('roles')
+            ->orderBy('name')
+            ->get()
+            ->groupBy(fn (User $person): string => (string) $person->program_id)
+            ->map(fn ($people) => $people->map(fn (User $person): array => [
+                'id' => $person->id,
+                'name' => $this->personName($person),
+                'email' => $person->email,
+                'role' => $this->roleLabel($person),
+                'profilePhoto' => $person->profile_photo_url,
+            ])->values());
+    }
+
+    private function personName(User $person): string
+    {
+        $fromParts = trim(($person->first_name ?? '').' '.($person->last_name ?? ''));
+
+        return $fromParts !== '' ? $fromParts : (string) ($person->name ?: $person->email);
+    }
+
+    private function roleLabel(User $person): string
+    {
+        $name = $person->roles->pluck('name')->first();
+        if (! $name) {
+            return 'Member';
+        }
+
+        return ucwords(str_replace(['-', '_'], ' ', (string) $name));
     }
 }

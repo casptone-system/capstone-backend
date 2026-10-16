@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\College;
 use App\Models\Program;
 use App\Models\Team;
+use App\Models\TeamJoinCode;
 use App\Models\User;
 use App\Notifications\TeamCodeInviteNotification;
 use App\Support\RoleSlug;
@@ -95,12 +96,12 @@ class TeamJoinTest extends TestCase
         $this->assertMatchesRegularExpression('/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/', $team->code);
 
         $faculty = $this->userWithRole(RoleSlug::FACULTY, ['program_id' => null]);
-        $this->actingAs($faculty)->postJson('/api/teams/join', ['code' => $original])->assertStatus(404);
-        $this->actingAs($faculty)->postJson('/api/teams/join', ['code' => $team->code])->assertOk();
+        $this->actingAs($faculty, 'api')->postJson('/api/teams/join', ['code' => $original])->assertStatus(422);
+        $this->actingAs($faculty, 'api')->postJson('/api/teams/join', ['code' => $team->code])->assertOk();
 
-        $this->actingAs($chair)->postJson("/api/teams/{$team->id}/revoke")->assertOk();
+        $this->actingAs($chair, 'api')->postJson("/api/teams/{$team->id}/revoke")->assertOk();
         $late = $this->userWithRole(RoleSlug::FACULTY, ['program_id' => null, 'email' => 'late-joiner@example.test']);
-        $this->actingAs($late)->postJson('/api/teams/join', ['code' => $team->fresh()->code])->assertStatus(422);
+        $this->actingAs($late, 'api')->postJson('/api/teams/join', ['code' => $team->fresh()->code])->assertStatus(422);
         $this->assertNull($late->fresh()->program_id);
         $this->assertSame($program->id, (int) $team->program_id);
     }
@@ -156,6 +157,65 @@ class TeamJoinTest extends TestCase
         ])->assertStatus(429);
     }
 
+    public function test_a_code_is_single_use_and_names_the_member_who_used_it(): void
+    {
+        [$team, $program, $chair] = $this->team(withChair: true);
+        $first = $this->userWithRole(RoleSlug::FACULTY, [
+            'program_id' => null,
+            'first_name' => 'Ada',
+            'last_name' => 'Member',
+            'name' => 'Ada Member',
+        ]);
+        $second = $this->userWithRole(RoleSlug::FACULTY, [
+            'program_id' => null,
+            'email' => 'second.member@example.test',
+        ]);
+
+        $this->actingAs($first)->postJson('/api/teams/join', ['code' => $team->code])->assertOk();
+        $this->actingAs($second)->postJson('/api/teams/join', ['code' => $team->code])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'This team code has already been used.');
+
+        $this->assertNull($second->fresh()->program_id);
+        $this->assertSame($first->id, (int) TeamJoinCode::query()->where('code', $team->code)->value('used_by'));
+
+        $listed = $this->actingAs($chair)->getJson('/api/teams?program_id='.$program->id)
+            ->assertOk()
+            ->assertJsonPath('data.0.join_codes.0.used_by.name', 'Ada Member');
+
+        $memberIds = collect($listed->json('data.0.program_members'))->pluck('id')->map(fn ($id) => (int) $id);
+        $this->assertTrue($memberIds->contains($first->id));
+        $this->assertFalse($memberIds->contains($second->id));
+    }
+
+    public function test_an_unused_code_expires_after_ten_minutes(): void
+    {
+        [$team] = $this->team();
+        TeamJoinCode::query()->where('code', $team->code)->update([
+            'expires_at' => now()->subMinute(),
+        ]);
+        $user = $this->userWithRole(RoleSlug::FACULTY, ['program_id' => null]);
+
+        $this->actingAs($user)->postJson('/api/teams/join', ['code' => $team->code])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'This team code has expired. Ask your Program Chair for a new one.');
+
+        $this->assertNull($user->fresh()->program_id);
+        $this->assertNull(TeamJoinCode::query()->where('code', $team->code)->value('used_by'));
+    }
+
+    public function test_program_chair_issues_a_code_that_lasts_ten_minutes(): void
+    {
+        [$team, , $chair] = $this->team(withChair: true);
+
+        $response = $this->actingAs($chair)->postJson("/api/teams/{$team->id}/codes")->assertCreated();
+        $expiresAt = \Illuminate\Support\Carbon::parse($response->json('data.expires_at'));
+
+        $this->assertMatchesRegularExpression('/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/', (string) $response->json('data.code'));
+        $this->assertTrue($expiresAt->between(now()->addMinutes(9), now()->addMinutes(11)));
+        $this->assertNotSame($team->code, $response->json('data.code'));
+    }
+
     /**
      * @return array{0: Team, 1: Program, 2: User|null}
      */
@@ -172,11 +232,20 @@ class TeamJoinTest extends TestCase
             $program->update(['chair_id' => $chair->id, 'chair' => $chair->name]);
         }
 
+        $code = TeamCodes::unique();
         $team = Team::query()->create([
             'name' => $program->name . ' Team',
             'program_id' => $program->id,
-            'code' => TeamCodes::unique(),
+            'code' => $code,
             'created_by' => $chair?->id,
+        ]);
+
+        TeamJoinCode::query()->create([
+            'team_id' => $team->id,
+            'program_id' => $program->id,
+            'code' => $code,
+            'created_by' => $chair?->id,
+            'expires_at' => now()->addMinutes(TeamJoinCode::TTL_MINUTES),
         ]);
 
         return [$team, $program, $chair];

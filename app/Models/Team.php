@@ -37,4 +37,9 @@ class Team extends Model
     {
         return $this->hasMany(User::class, 'team_id');
     }
+
+    public function joinCodes(): HasMany
+    {
+        return $this->hasMany(TeamJoinCode::class)->orderByDesc('created_at')->orderByDesc('id');
+    }
 }
