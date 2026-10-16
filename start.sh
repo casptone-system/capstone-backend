@@ -13,6 +13,9 @@ fi
 export MYSQL_ATTR_SSL_CA="${MYSQL_ATTR_SSL_CA:-/etc/ssl/certs/ca-certificates.crt}"
 
 php artisan migrate --force --no-interaction
+php artisan storage:link --force --no-interaction || true
+mkdir -p storage/app/public/profile_photos
+chmod -R ug+rwx storage bootstrap/cache || true
 
 # Queue workers belong in a separate process/service:
 # php artisan queue:work --sleep=1 --tries=3 --timeout=90

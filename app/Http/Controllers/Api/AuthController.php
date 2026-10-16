@@ -9,6 +9,7 @@ use App\Models\TeamJoinCode;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
 use App\Support\LoginChallenge;
+use App\Support\ProfilePhoto;
 use App\Support\RoleSlug;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
@@ -772,11 +773,8 @@ class AuthController extends Controller
             $middleName = $validated['middle_name'] ?? null;
         }
 
-        if ($request->hasFile('profile_photo')) {
-            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-        } else {
-            $profilePhotoPath = null;
-        }
+        $profilePhotoFile = $request->hasFile('profile_photo') ? $request->file('profile_photo') : null;
+        $profilePhotoPath = null;
 
         // Determine creator and whether they're a super admin
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
@@ -806,8 +804,11 @@ class AuthController extends Controller
                 'phone_number' => $validated['phone'] ?? null,
                 'birth_date' => $validated['birthdate'] ?? null,
                 'sex' => $validated['sex'] ?? null,
-                'profile_photo' => $profilePhotoPath,
             ]);
+            if ($profilePhotoFile) {
+                ProfilePhoto::store($user, $profilePhotoFile);
+                $profilePhotoPath = $user->profile_photo;
+            }
             if ($isSuperAdmin) {
                 $user->forceFill(['email_verified_at' => now()])->save();
             }
@@ -904,28 +905,24 @@ class AuthController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
         }
 
-        $validated = $request->validate([
+        $request->validate([
             'profile_photo' => ['required', 'image', 'max:10240'],
         ]);
 
-        $profilePhotoPath = null;
-        if ($request->hasFile('profile_photo')) {
-            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-        }
-
-        if (! empty($user->profile_photo) && $user->profile_photo !== $profilePhotoPath) {
-            Storage::disk('public')->delete($user->profile_photo);
-        }
-
-        $user->forceFill(['profile_photo' => $profilePhotoPath])->save();
+        ProfilePhoto::store($user, $request->file('profile_photo'));
 
         return response()->json([
             'success' => true,
             'message' => 'Profile photo updated successfully.',
             'data' => [
-                'user' => new UserResource($user),
+                'user' => new UserResource($user->fresh()),
             ],
         ], 200);
+    }
+
+    public function profilePhoto(User $user)
+    {
+        return ProfilePhoto::response($user);
     }
 
     public function logout(Request $request)

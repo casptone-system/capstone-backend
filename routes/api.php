@@ -46,6 +46,8 @@ Route::middleware(['security', 'audit.api'])->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/auth/reset-password', [AuthController::class, 'resetPassword']);
     Route::get('/auth/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
+    // Public so <img src> can load without a bearer token.
+    Route::get('/users/{user}/profile-photo', [AuthController::class, 'profilePhoto']);
 });
 
 Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.api'])->group(function () {
