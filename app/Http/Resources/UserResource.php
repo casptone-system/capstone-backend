@@ -39,7 +39,7 @@ class UserResource extends JsonResource
             'phone' => $this->phone_number,
             'birthdate' => $this->birth_date,
             'sex' => $this->sex,
-            'profilePhoto' => $this->profile_photo ? $this->profile_photo_url : null,
+            'profilePhoto' => ($this->profile_photo || $this->profile_photo_blob) ? $this->profile_photo_url : null,
             'profilePhotoPath' => $this->profile_photo,
             'role' => $primaryRole,
             'role_slug' => $primaryRole,
