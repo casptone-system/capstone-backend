@@ -42,7 +42,7 @@ return [
 
     'two_factor_roles' => $parseCsv((string) env(
         'AUTH_2FA_ROLES',
-        'qa,vpaa,dean,program-chair,accreditor'
+        'qa,vpaa,dean,program-chair,accreditor,faculty,area-in-charge'
     )),
 
     // Emails that skip the login OTP (break-glass accounts).

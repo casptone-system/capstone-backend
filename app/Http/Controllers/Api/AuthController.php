@@ -213,10 +213,15 @@ class AuthController extends Controller
             return false;
         }
 
+        // Prefer an explicit role allow-list when configured.
         $required = array_map(
             fn (string $role) => RoleSlug::canonicalize($role) ?? $role,
             (array) config('adams.two_factor_roles', [])
         );
+
+        if ($required === []) {
+            return true;
+        }
 
         foreach ($user->getRoleNames() as $name) {
             $slug = RoleSlug::canonicalize($name);
@@ -225,7 +230,8 @@ class AuthController extends Controller
             }
         }
 
-        return false;
+        // New / unassigned accounts still get email OTP on login.
+        return $user->getRoleNames()->isEmpty();
     }
 
     private function getLoginIpLimitPerMinute(): int
