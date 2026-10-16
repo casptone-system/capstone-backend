@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Filesystem\SupabaseStorageAdapter;
+use App\Mail\Transport\BrevoTransport;
 use App\Models\AuditLog;
 use App\Models\College;
 use App\Models\BoardOfActionDocument;
@@ -27,6 +28,7 @@ use App\Policies\ReviewPolicy;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use League\Flysystem\Filesystem;
@@ -48,6 +50,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Mail::extend('brevo', function () {
+            return new BrevoTransport((string) config('services.brevo.key', ''));
+        });
+
         Storage::extend('supabase', function ($app, array $config) {
             $adapter = new SupabaseStorageAdapter(
                 (string) ($config['url'] ?? ''),

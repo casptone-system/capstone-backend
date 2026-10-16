@@ -366,7 +366,7 @@ class AuthController extends Controller
         if ($this->isMailConfigInvalid()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Mail is not configured correctly. On Render free tier use MAIL_MAILER=resend with RESEND_API_KEY. Locally you can use MAIL_MAILER=smtp with Gmail.',
+                'message' => 'Mail is not configured correctly. On Render free tier use MAIL_MAILER=brevo with BREVO_API_KEY (and a verified sender). Locally you can use MAIL_MAILER=smtp with Gmail.',
             ], 422);
         }
 
@@ -399,6 +399,10 @@ class AuthController extends Controller
         }
 
         $defaultMailer = (string) config('mail.default');
+
+        if ($defaultMailer === 'brevo') {
+            return trim((string) config('services.brevo.key', '')) === '';
+        }
 
         if ($defaultMailer === 'resend') {
             $key = (string) config('services.resend.key', '');
