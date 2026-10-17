@@ -19,6 +19,20 @@ class AddSecurityHeaders
             return $response;
         }
 
+        // Reduce technology fingerprinting (CWE-200): strip platform/version headers.
+        if (function_exists('header_remove')) {
+            header_remove('X-Powered-By');
+        }
+        foreach ([
+            'X-Powered-By',
+            'x-powered-by',
+            'X-Render-Origin-Server',
+            'x-render-origin-server',
+            'Server',
+        ] as $fingerprintHeader) {
+            $response->headers->remove($fingerprintHeader);
+        }
+
         $headers = [
             'X-Frame-Options' => (string) config('security.headers.x_frame_options', 'DENY'),
             'X-Content-Type-Options' => 'nosniff',
@@ -45,10 +59,11 @@ class AddSecurityHeaders
         }
 
         foreach ($headers as $name => $value) {
-            if ($value === '' || $response->headers->has($name)) {
+            if ($value === '') {
                 continue;
             }
 
+            // Always overwrite so earlier middleware/PHP cannot leave weaker values.
             $response->headers->set($name, $value);
         }
 
