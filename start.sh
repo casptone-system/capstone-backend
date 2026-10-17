@@ -20,6 +20,7 @@ chmod -R ug+rwx storage bootstrap/cache || true
 # Queue workers belong in a separate process/service:
 # php artisan queue:work --sleep=1 --tries=3 --timeout=90
 exec php \
+  -d expose_php=Off \
   -d upload_max_filesize=64M \
   -d post_max_size=68M \
   -d memory_limit=256M \

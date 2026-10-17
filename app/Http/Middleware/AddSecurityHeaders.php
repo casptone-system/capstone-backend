@@ -22,12 +22,16 @@ class AddSecurityHeaders
         // Reduce technology fingerprinting (CWE-200): strip platform/version headers.
         if (function_exists('header_remove')) {
             header_remove('X-Powered-By');
+            header_remove('Server');
         }
         foreach ([
             'X-Powered-By',
             'x-powered-by',
             'X-Render-Origin-Server',
             'x-render-origin-server',
+            'rndr-id',
+            'Render-Routing',
+            'Host',
             'Server',
         ] as $fingerprintHeader) {
             $response->headers->remove($fingerprintHeader);

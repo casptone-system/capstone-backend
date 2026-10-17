@@ -27,7 +27,9 @@ class SecurityHeadersTest extends TestCase
             ->assertHeader('Content-Security-Policy')
             ->assertHeader('Cache-Control')
             ->assertHeaderMissing('X-Powered-By')
-            ->assertHeaderMissing('X-Render-Origin-Server');
+            ->assertHeaderMissing('X-Render-Origin-Server')
+            ->assertHeaderMissing('rndr-id')
+            ->assertHeaderMissing('Host');
 
         $cacheControl = (string) $response->headers->get('Cache-Control');
         $this->assertStringContainsString('no-store', $cacheControl);
