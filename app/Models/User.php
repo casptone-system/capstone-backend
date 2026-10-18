@@ -47,6 +47,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'profile_photo_blob',
     ];
 
     /**
@@ -287,16 +288,16 @@ class User extends Authenticatable
 
     public function getProfilePhotoUrlAttribute(): ?string
     {
-        if (empty($this->profile_photo)) {
-            return null;
-        }
-
-        return asset('storage/' . ltrim($this->profile_photo, '/'));
+        return \App\Support\ProfilePhoto::url($this);
     }
 
     public function hasVerifiedEmail(): bool
     {
         if (! config('adams.email_verification_enabled')) {
+            return true;
+        }
+
+        if ($this->isSuperAdmin()) {
             return true;
         }
 

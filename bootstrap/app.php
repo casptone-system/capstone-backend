@@ -26,22 +26,25 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->use([
             \Illuminate\Http\Middleware\HandleCors::class,
         ]);
+        $middleware->append(\App\Http\Middleware\AddSecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson()
         );
 
-        // Thrown responses (403, 429, 500) leave the CORS middleware before it
-        // can add headers. Attach them here so the browser can read the error.
+        // Thrown responses (403, 429, 500) leave the CORS / security middleware
+        // before headers are attached. Re-apply them so browsers and scanners
+        // still see a hardened error response.
         $exceptions->respond(function (Response $response, \Throwable $exception, Request $request) {
             if (! $request->is('api/*') && ! $request->is('sanctum/csrf-cookie')) {
-                return $response;
+                return app(\App\Http\Middleware\AddSecurityHeaders::class)->apply($request, $response);
             }
 
             $cors = app(CorsService::class);
             $cors->setOptions((array) config('cors', []));
+            $response = $cors->addActualRequestHeaders($response, $request);
 
-            return $cors->addActualRequestHeaders($response, $request);
+            return app(\App\Http\Middleware\AddSecurityHeaders::class)->apply($request, $response);
         });
     })->create();

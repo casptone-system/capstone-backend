@@ -13,7 +13,9 @@ $parseCsv = static function (string $value): array {
 $enabledInProduction = static function (string $key): bool {
     $raw = env($key);
     if ($raw === null || $raw === '') {
-        return env('APP_ENV') === 'production';
+        // When APP_ENV is omitted on the host, Laravel still treats the app as
+        // production. Mirror that here so auth/mail features default ON in prod.
+        return (string) env('APP_ENV', 'production') === 'production';
     }
 
     return filter_var($raw, FILTER_VALIDATE_BOOL);
@@ -30,8 +32,9 @@ return [
     |   TEAM_INVITES_ENABLED=true
     |   MAIL_MAILER=log
     | Then sign in as a role that requires a code (dean, program chair, QA,
-    | VPAA, superadmin, accreditor). The 6-digit code is written to
-    | storage/logs/laravel.log. Faculty and area-in-charge skip the code.
+    | VPAA, accreditor). Superadmin always skips OTP/email verification.
+    | Faculty and area-in-charge skip the code. The 6-digit code is written to
+    | storage/logs/laravel.log when MAIL_MAILER=log.
     */
     'two_factor_enabled' => $enabledInProduction('AUTH_2FA_ENABLED'),
     'email_verification_enabled' => $enabledInProduction('AUTH_EMAIL_VERIFICATION_ENABLED'),
@@ -39,13 +42,13 @@ return [
 
     'two_factor_roles' => $parseCsv((string) env(
         'AUTH_2FA_ROLES',
-        'superadmin,qa,vpaa,dean,program-chair,accreditor'
+        'qa,vpaa,dean,program-chair,accreditor,faculty,area-in-charge'
     )),
 
-    // Emails that skip the login OTP (e.g. break-glass @example.com accounts).
+    // Emails that skip the login OTP (break-glass accounts).
     'two_factor_exempt_emails' => array_map(
         static fn (string $email): string => strtolower($email),
-        $parseCsv((string) env('AUTH_2FA_EXEMPT_EMAILS', 'admin@example.com'))
+        $parseCsv((string) env('AUTH_2FA_EXEMPT_EMAILS', 'admin@example.com,superadmin@isu.edu.ph'))
     ),
 
     'institutional_email_domain' => strtolower((string) env('INSTITUTIONAL_EMAIL_DOMAIN', 'isu.edu.ph')),

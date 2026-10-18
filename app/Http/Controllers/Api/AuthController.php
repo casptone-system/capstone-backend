@@ -9,6 +9,7 @@ use App\Models\TeamJoinCode;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
 use App\Support\LoginChallenge;
+use App\Support\ProfilePhoto;
 use App\Support\RoleSlug;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
@@ -202,16 +203,26 @@ class AuthController extends Controller
             return false;
         }
 
+        // Break-glass: superadmin always skips login OTP.
+        if ($user->isSuperAdmin()) {
+            return false;
+        }
+
         $email = strtolower(trim((string) $user->email));
         $exempt = (array) config('adams.two_factor_exempt_emails', []);
         if ($email !== '' && in_array($email, $exempt, true)) {
             return false;
         }
 
+        // Prefer an explicit role allow-list when configured.
         $required = array_map(
             fn (string $role) => RoleSlug::canonicalize($role) ?? $role,
             (array) config('adams.two_factor_roles', [])
         );
+
+        if ($required === []) {
+            return true;
+        }
 
         foreach ($user->getRoleNames() as $name) {
             $slug = RoleSlug::canonicalize($name);
@@ -220,7 +231,8 @@ class AuthController extends Controller
             }
         }
 
-        return false;
+        // New / unassigned accounts still get email OTP on login.
+        return $user->getRoleNames()->isEmpty();
     }
 
     private function getLoginIpLimitPerMinute(): int
@@ -363,19 +375,19 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        if ($this->isSmtpConfigInvalid()) {
+        if ($this->isMailConfigInvalid()) {
             return response()->json([
                 'success' => false,
-                'message' => 'SMTP is not configured correctly. Set MAIL_MAILER=smtp, MAIL_USERNAME, and MAIL_PASSWORD in .env using a valid Gmail address and app password.',
+                'message' => 'Mail is not configured correctly. On Render free tier use MAIL_MAILER=brevo with BREVO_API_KEY (and a verified sender). Locally you can use MAIL_MAILER=smtp with Gmail.',
             ], 422);
         }
 
         try {
             Mail::raw(
-                'This is a test email from ADAMS to confirm that SMTP is configured correctly. If you received this email, SMTP delivery is working.',
+                'This is a test email from ADAMS to confirm that mail delivery is configured correctly. If you received this email, outbound mail is working.',
                 function ($message) use ($validated) {
                     $message->to($validated['email'])
-                        ->subject('ADAMS SMTP Configuration Test');
+                        ->subject('ADAMS Mail Configuration Test');
                 }
             );
 
@@ -386,24 +398,39 @@ class AuthController extends Controller
         } catch (\Throwable $exception) {
             return response()->json([
                 'success' => false,
-                'message' => 'SMTP check failed. Please verify your mail settings and credentials.',
+                'message' => 'Mail check failed. Please verify your mail settings and credentials.',
                 'error' => $exception->getMessage(),
             ], 422);
         }
     }
 
-    private function isSmtpConfigInvalid(): bool
+    private function isMailConfigInvalid(): bool
     {
         if (app()?->runningUnitTests()) {
             return false;
         }
-        $defaultMailer = config('mail.default');
-        $username = config('mail.mailers.smtp.username');
-        $password = config('mail.mailers.smtp.password');
 
-        return $defaultMailer !== 'smtp'
-            || empty($username)
-            || empty($password)
+        $defaultMailer = (string) config('mail.default');
+
+        if ($defaultMailer === 'brevo') {
+            return trim((string) config('services.brevo.key', '')) === '';
+        }
+
+        if ($defaultMailer === 'resend') {
+            $key = (string) config('services.resend.key', '');
+
+            return $key === '' || str_starts_with($key, 're_') === false;
+        }
+
+        if ($defaultMailer !== 'smtp') {
+            return true;
+        }
+
+        $username = (string) config('mail.mailers.smtp.username');
+        $password = (string) config('mail.mailers.smtp.password');
+
+        return $username === ''
+            || $password === ''
             || ! str_contains($username, '@')
             || str_contains($username, 'your-gmail')
             || str_contains($password, 'your-gmail')
@@ -746,11 +773,8 @@ class AuthController extends Controller
             $middleName = $validated['middle_name'] ?? null;
         }
 
-        if ($request->hasFile('profile_photo')) {
-            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-        } else {
-            $profilePhotoPath = null;
-        }
+        $profilePhotoFile = $request->hasFile('profile_photo') ? $request->file('profile_photo') : null;
+        $profilePhotoPath = null;
 
         // Determine creator and whether they're a super admin
         $creator = $request->user('sanctum') ?? $request->user('api') ?? $request->user();
@@ -780,8 +804,11 @@ class AuthController extends Controller
                 'phone_number' => $validated['phone'] ?? null,
                 'birth_date' => $validated['birthdate'] ?? null,
                 'sex' => $validated['sex'] ?? null,
-                'profile_photo' => $profilePhotoPath,
             ]);
+            if ($profilePhotoFile) {
+                ProfilePhoto::store($user, $profilePhotoFile);
+                $profilePhotoPath = $user->profile_photo;
+            }
             if ($isSuperAdmin) {
                 $user->forceFill(['email_verified_at' => now()])->save();
             }
@@ -878,28 +905,24 @@ class AuthController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
         }
 
-        $validated = $request->validate([
+        $request->validate([
             'profile_photo' => ['required', 'image', 'max:10240'],
         ]);
 
-        $profilePhotoPath = null;
-        if ($request->hasFile('profile_photo')) {
-            $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-        }
-
-        if (! empty($user->profile_photo) && $user->profile_photo !== $profilePhotoPath) {
-            Storage::disk('public')->delete($user->profile_photo);
-        }
-
-        $user->forceFill(['profile_photo' => $profilePhotoPath])->save();
+        ProfilePhoto::store($user, $request->file('profile_photo'));
 
         return response()->json([
             'success' => true,
             'message' => 'Profile photo updated successfully.',
             'data' => [
-                'user' => new UserResource($user),
+                'user' => new UserResource($user->fresh()),
             ],
         ], 200);
+    }
+
+    public function profilePhoto(User $user)
+    {
+        return ProfilePhoto::response($user);
     }
 
     public function logout(Request $request)

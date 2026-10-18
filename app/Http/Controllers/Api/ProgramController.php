@@ -9,6 +9,7 @@ use App\Models\ProgramMember;
 use App\Models\Team;
 use App\Models\User;
 use App\Support\OrgScope;
+use App\Support\ProfilePhoto;
 use App\Support\RoleSlug;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -177,16 +178,10 @@ class ProgramController extends Controller
                 $this->assignProgramChairToProgram($chairUser, $program, $team);
                 $this->ensureProgramChairMembership($chairUser, $program, $request->user());
             } elseif ($hasNewChairData) {
-                // handle profile photo if uploaded
-                $profilePhotoPath = null;
-                if ($request->hasFile('profile_photo')) {
-                    $profilePhotoPath = $request->file('profile_photo')->store('profile_photos', 'public');
-                }
-
                 $chairUser = $this->createProgramChairUser([
                     'chair_name' => $validated['chair_name'],
                     'chair_email' => $validated['chair_email'],
-                    'profile_photo_path' => $profilePhotoPath,
+                    'profile_photo_file' => $request->file('profile_photo'),
                 ], $program, $team);
 
                 $program->chair_id = $chairUser->id;
@@ -443,7 +438,7 @@ class ProgramController extends Controller
 
         $role = Role::firstOrCreate(['name' => RoleSlug::PROGRAM_CHAIR, 'guard_name' => 'web']);
 
-        $userData = [
+        $user = User::create([
             'name' => $name,
             'first_name' => $firstName,
             'last_name' => $lastName,
@@ -452,14 +447,12 @@ class ProgramController extends Controller
             'program_id' => $program->id,
             'team_id' => $team->id,
             'college_id' => $program->college_id,
-        ];
-
-        if (! empty($data['profile_photo_path'])) {
-            $userData['profile_photo'] = $data['profile_photo_path'];
-        }
-
-        $user = User::create($userData);
+        ]);
         $user->forceFill(['email_verified_at' => now()])->save();
+
+        if (! empty($data['profile_photo_file'])) {
+            ProfilePhoto::store($user, $data['profile_photo_file']);
+        }
 
         $user->assignRole($role);
 
