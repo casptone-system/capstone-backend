@@ -62,6 +62,35 @@ class AccreditorEvidenceController extends Controller
         ], $alreadySubmitted ? 200 : 201);
     }
 
+    public function unsubmit(Request $request)
+    {
+        $user = $request->user();
+        [$program, $cycle] = $this->chairContext($user);
+
+        if ($cycle->submitted_to_accreditor_at === null) {
+            return response()->json([
+                'success' => true,
+                'message' => 'This accreditation is not currently submitted to the accreditor.',
+                'data' => $this->submissionPayload($program, $cycle),
+            ]);
+        }
+
+        $cycle->forceFill([
+            'submitted_to_accreditor_at' => null,
+            'submitted_to_accreditor_by' => null,
+        ])->save();
+
+        app(AuditLogService::class)->record($request, 'accreditor_evidence_unsubmitted');
+
+        $cycle->refresh()->load('submittedToAccreditorBy');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Submission withdrawn. The accreditor can no longer view this program\'s evidence.',
+            'data' => $this->submissionPayload($program, $cycle),
+        ]);
+    }
+
     public function colleges(Request $request)
     {
         $this->assertAccreditor($request->user());

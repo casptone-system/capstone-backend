@@ -114,6 +114,54 @@ class UserController extends Controller
         return null;
     }
 
+    /**
+     * programs.chair_id is the authorization source of truth for program-chair APIs.
+     * Role + users.program_id alone is not enough (FileRequestPolicy, OrgScope, ownsAssignedProgram).
+     */
+    private function ensureProgramHasNoOtherChair(int $programId, User $user): ?\Illuminate\Http\JsonResponse
+    {
+        $program = Program::find($programId);
+        if ($program?->chair_id && (int) $program->chair_id !== (int) $user->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This program already has a Program Chair.',
+                'errors' => ['program_id' => ['This program already has a Program Chair.']],
+            ], 422);
+        }
+
+        return null;
+    }
+
+    private function linkUserAsProgramChair(User $user): void
+    {
+        if (! $user->isProgramChair() || ! $user->program_id) {
+            return;
+        }
+
+        $program = Program::find($user->program_id);
+        if (! $program) {
+            return;
+        }
+
+        if ($program->chair_id && (int) $program->chair_id !== (int) $user->id) {
+            return;
+        }
+
+        Program::where('chair_id', $user->id)
+            ->where('id', '!=', $program->id)
+            ->update(['chair_id' => null, 'chair' => null]);
+
+        $program->update([
+            'chair_id' => $user->id,
+            'chair' => $user->name,
+        ]);
+
+        if ((int) $user->college_id !== (int) $program->college_id) {
+            $user->college_id = $program->college_id;
+            $user->save();
+        }
+    }
+
     private function ensureNoDuplicateDeanForCollege(?int $collegeId, ?User $user = null): ?\Illuminate\Http\JsonResponse
     {
         if (! $collegeId) {
@@ -510,16 +558,9 @@ class UserController extends Controller
             $this->ensureRoleHasPermissions($role, $slug);
 
             if ($slug === RoleSlug::PROGRAM_CHAIR && ! empty($validated['program_id'])) {
-                $program = Program::find($validated['program_id']);
-                if ($program && ! $program->chair_id) {
-                    $program->update([
-                        'chair_id' => $user->id,
-                        'chair' => $user->name,
-                    ]);
-                    $user->program_id = $program->id;
-                    $user->college_id = $program->college_id;
-                    $user->save();
-                }
+                $user->program_id = (int) $validated['program_id'];
+                $user->save();
+                $this->linkUserAsProgramChair($user->fresh());
             }
 
             if ($slug === RoleSlug::DEAN) {
@@ -815,6 +856,9 @@ class UserController extends Controller
                 if ($response = $this->ensureChairIsNotAlreadyAssigned((int) $programId, $user)) {
                     return $response;
                 }
+                if ($response = $this->ensureProgramHasNoOtherChair((int) $programId, $user)) {
+                    return $response;
+                }
             }
 
             $user->syncRoles([$role->name]);
@@ -825,6 +869,11 @@ class UserController extends Controller
             $user->forceFill(['email_verified_at' => null]);
         }
         $user->save();
+
+        // Keep programs.chair_id in sync — role alone does not authorize chair APIs.
+        if ($user->fresh()->isProgramChair()) {
+            $this->linkUserAsProgramChair($user->fresh());
+        }
 
         $updatedCollege = null;
         if (array_key_exists('college_id', $validated) && ! is_null($validated['college_id'])) {

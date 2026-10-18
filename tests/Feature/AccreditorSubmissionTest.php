@@ -158,6 +158,44 @@ class AccreditorSubmissionTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_program_chair_can_unsubmit_and_hide_evidence_again(): void
+    {
+        ['college' => $college, 'program' => $program, 'cycle' => $cycle] = $this->makeProgram();
+
+        $chair = $this->userWithRole('program-chair');
+        $program->update(['chair_id' => $chair->id]);
+        $accreditor = $this->userWithRole('accreditor');
+
+        $this->actingAs($chair)
+            ->postJson('/api/program-chair/accreditor-submission')
+            ->assertCreated()
+            ->assertJsonPath('data.submitted', true);
+
+        $this->actingAs($accreditor)
+            ->getJson('/api/accreditor/evidence/colleges')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $college->id);
+
+        $this->actingAs($chair)
+            ->deleteJson('/api/program-chair/accreditor-submission')
+            ->assertOk()
+            ->assertJsonPath('data.submitted', false)
+            ->assertJsonPath('data.submittedAt', null);
+
+        $this->assertNull($cycle->fresh()->submitted_to_accreditor_at);
+        $this->assertNull($cycle->fresh()->submitted_to_accreditor_by);
+
+        $this->actingAs($accreditor)
+            ->getJson('/api/accreditor/evidence/colleges')
+            ->assertOk()
+            ->assertJsonCount(0, 'data');
+
+        $this->actingAs($chair)
+            ->deleteJson('/api/program-chair/accreditor-submission')
+            ->assertOk()
+            ->assertJsonPath('message', 'This accreditation is not currently submitted to the accreditor.');
+    }
+
     public function test_other_roles_cannot_submit_or_browse_the_accreditor_catalog(): void
     {
         ['program' => $program] = $this->makeProgram();

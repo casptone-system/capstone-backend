@@ -111,6 +111,7 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::get('review/areas', [FacultyAreaContentController::class, 'reviewAreas']);
     Route::get('program-chair/accreditor-submission', [AccreditorEvidenceController::class, 'showSubmission']);
     Route::post('program-chair/accreditor-submission', [AccreditorEvidenceController::class, 'submit']);
+    Route::delete('program-chair/accreditor-submission', [AccreditorEvidenceController::class, 'unsubmit']);
     Route::get('accreditor/evidence/colleges', [AccreditorEvidenceController::class, 'colleges']);
     Route::get('accreditor/evidence/colleges/{college}/programs', [AccreditorEvidenceController::class, 'programs']);
     Route::get('accreditor/evidence/programs/{program}/areas', [AccreditorEvidenceController::class, 'areas']);

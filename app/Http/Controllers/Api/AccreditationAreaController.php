@@ -870,7 +870,9 @@ class AccreditationAreaController extends Controller
     {
         $this->assertCycleIsOpenForAssignment($request->user(), $accreditationArea->cycle()->firstOrFail());
         $validated = $request->validate([
-            'deadline' => ['required', 'date'],
+            'deadline' => ['required', 'date', 'after_or_equal:today'],
+        ], [
+            'deadline.after_or_equal' => 'The submission deadline cannot be before today.',
         ]);
 
         $accreditationArea->update(['deadline' => $validated['deadline']]);

@@ -302,6 +302,11 @@ class ProgramController extends Controller
     {
         $this->authorize('update', $program);
 
+        // Allow clearing the chair with null or "" so programs can be left without a chair.
+        if ($request->exists('chair_id') && $request->input('chair_id') === '') {
+            $request->merge(['chair_id' => null]);
+        }
+
         $rules = [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'code' => ['sometimes', 'required', 'string', 'max:50', 'unique:programs,code,' . $program->id],
