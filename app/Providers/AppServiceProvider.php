@@ -25,6 +25,7 @@ use App\Policies\ParameterContentRowPolicy;
 use App\Policies\ProgramMemberPolicy;
 use App\Policies\ProgramPolicy;
 use App\Policies\ReviewPolicy;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
@@ -50,6 +51,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Surface N+1 queries in local/testing. Never enable in production.
+        Model::preventLazyLoading(! $this->app->isProduction());
+
+        Gate::define('viewPulse', function (?User $user = null): bool {
+            return (bool) ($user?->isSuperAdmin());
+        });
+
         Mail::extend('brevo', function () {
             return new BrevoTransport((string) config('services.brevo.key', ''));
         });

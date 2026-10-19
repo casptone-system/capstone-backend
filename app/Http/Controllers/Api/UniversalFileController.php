@@ -143,7 +143,13 @@ class UniversalFileController extends Controller
     {
         $this->authorize('download', $universalFile);
 
-        $response = $this->evidenceStorage->download($universalFile->file_path, $universalFile->original_name);
+        $response = $this->evidenceStorage->respond(
+            $request,
+            $universalFile->file_path,
+            $universalFile->original_name,
+            'attachment',
+            'application/pdf'
+        );
         abort_if($response === null, 404, 'File not found.');
         $request->attributes->set('audit_event', 'universal_file_downloaded');
 
@@ -154,9 +160,11 @@ class UniversalFileController extends Controller
     {
         $this->authorize('download', $universalFile);
 
-        $response = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $universalFile->file_path,
             $universalFile->original_name,
+            'inline',
             'application/pdf'
         );
         abort_if($response === null, 404, 'File not found.');

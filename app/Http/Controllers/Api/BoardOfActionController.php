@@ -192,29 +192,37 @@ class BoardOfActionController extends Controller
         ]);
     }
 
-    public function download(BoardOfActionDocument $boardOfActionDocument)
+    public function download(Request $request, BoardOfActionDocument $boardOfActionDocument)
     {
         $this->authorize('download', $boardOfActionDocument);
 
         $version = $boardOfActionDocument->latestVersion()->first();
         abort_unless($version, 404, 'File not found.');
 
-        $response = $this->evidenceStorage->download($version->file_path, $version->original_name);
+        $response = $this->evidenceStorage->respond(
+            $request,
+            $version->file_path,
+            $version->original_name,
+            'attachment',
+            'application/pdf'
+        );
         abort_if($response === null, 404, 'File not found.');
 
         return $response;
     }
 
-    public function preview(BoardOfActionDocument $boardOfActionDocument)
+    public function preview(Request $request, BoardOfActionDocument $boardOfActionDocument)
     {
         $this->authorize('download', $boardOfActionDocument);
 
         $version = $boardOfActionDocument->latestVersion()->first();
         abort_unless($version, 404, 'File not found.');
 
-        $response = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $version->file_path,
             $version->original_name,
+            'inline',
             'application/pdf'
         );
         abort_if($response === null, 404, 'File not found.');

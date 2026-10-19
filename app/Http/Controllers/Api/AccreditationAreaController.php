@@ -22,13 +22,15 @@ use App\Services\AaccupStructureService;
 use App\Services\AreaAssignmentService;
 use App\Services\AreaDeadlineReminderService;
 use App\Services\AreaProgressService;
-use App\Services\DesignationLetterService;
+use App\Jobs\IssueDesignationLetterJob;
 use App\Services\EvidenceStorage;
 use App\Support\AreaAssignmentNotifier;
 use App\Support\AreaDocumentRules;
 use App\Support\AreaEvidenceGate;
+use App\Support\DispatchAfterResponse;
 use App\Support\OrgScope;
 use App\Support\RoleGate;
+use App\Support\ScopedCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -40,7 +42,6 @@ class AccreditationAreaController extends Controller
     public function __construct(
         private EvidenceStorage $evidenceStorage,
         private AreaAssignmentService $assignments,
-        private DesignationLetterService $letters,
     ) {}
 
     /**
@@ -249,21 +250,27 @@ class AccreditationAreaController extends Controller
 
         $faculty = $member->user;
         if ($faculty) {
-            $this->letters->issue(
-                $faculty,
-                $accreditationArea->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+            DispatchAfterResponse::job(new IssueDesignationLetterJob(
+                $faculty->id,
+                $accreditationArea->id,
                 DesignationFile::ROLE_MEMBER,
-                $request->user(),
-            );
-            AreaAssignmentNotifier::notifyMember(
-                $faculty,
-                $accreditationArea,
-                $request->user(),
-                $validated['deadline'] ?? null,
-                $validated['instructions'] ?? null,
-            );
+                $request->user()?->id,
+            ));
 
-            // Log activity
+            $deadline = $validated['deadline'] ?? null;
+            $instructions = $validated['instructions'] ?? null;
+            $assignedById = $request->user()->id;
+            $areaId = $accreditationArea->id;
+            $facultyId = $faculty->id;
+            dispatch(function () use ($facultyId, $areaId, $assignedById, $deadline, $instructions) {
+                $facultyUser = User::query()->find($facultyId);
+                $area = AccreditationArea::query()->with('cycle.program')->find($areaId);
+                $assignedBy = User::query()->find($assignedById);
+                if ($facultyUser && $area && $assignedBy) {
+                    AreaAssignmentNotifier::notifyMember($facultyUser, $area, $assignedBy, $deadline, $instructions);
+                }
+            })->afterResponse();
+
             AuditLog::create([
                 'user_id' => $request->user()->id,
                 'action' => 'assign_faculty_to_area',
@@ -276,6 +283,12 @@ class AccreditationAreaController extends Controller
                     'role' => $validated['role'] ?? 'member',
                 ],
             ]);
+
+            $accreditationArea->loadMissing('cycle.program');
+            $programId = (int) ($accreditationArea->cycle?->program_id ?? 0);
+            if ($programId > 0) {
+                ScopedCache::bustProgram($programId, $accreditationArea->cycle?->program?->college_id);
+            }
         }
 
         return response()->json([
@@ -490,7 +503,7 @@ class AccreditationAreaController extends Controller
 
             $this->seedFixedAreas($cycle);
             $areas = $cycle->areas()
-                ->with(['chair', 'members.user'])
+                ->with(['chair.roles', 'members.user.roles'])
                 ->whereNotNull('code')
                 ->orderBy('id')
                 ->get();
@@ -573,24 +586,32 @@ class AccreditationAreaController extends Controller
             $cycle->loadMissing('program');
 
             $areas = $cycle->areas()
-                ->with(['chair', 'reviews' => fn ($q) => $q->latest()])
+                ->with(['chair.roles', 'reviews' => fn ($q) => $q->latest()])
                 ->whereNotNull('code')
                 ->orderBy('id')
                 ->get();
 
-            $areaIds = $areas->pluck('id');
-            $documentCounts = Document::query()
+            $areaIds = $areas->pluck('id')->filter()->values();
+            $directCounts = Document::query()
                 ->pdfOnly()
-                ->where(function ($query) use ($areaIds) {
-                    $query->whereIn('area_id', $areaIds)
-                        ->orWhereHas('contentRow.parameter', fn ($parameter) => $parameter->whereIn('area_id', $areaIds));
-                })
-                ->with('contentRow.parameter')
-                ->get(['id', 'area_id', 'content_row_id'])
-                ->groupBy(function (Document $document) {
-                    return (int) ($document->area_id ?: $document->contentRow?->parameter?->area_id);
-                })
-                ->map->count();
+                ->whereIn('area_id', $areaIds)
+                ->selectRaw('area_id, COUNT(*) as aggregate')
+                ->groupBy('area_id')
+                ->pluck('aggregate', 'area_id');
+
+            $viaRowCounts = Document::query()
+                ->pdfOnly()
+                ->whereNull('documents.area_id')
+                ->join('parameter_content_rows as pcr', 'pcr.id', '=', 'documents.content_row_id')
+                ->join('accreditation_parameters as ap', 'ap.id', '=', 'pcr.parameter_id')
+                ->whereIn('ap.area_id', $areaIds)
+                ->selectRaw('ap.area_id as area_id, COUNT(documents.id) as aggregate')
+                ->groupBy('ap.area_id')
+                ->pluck('aggregate', 'area_id');
+
+            $documentCounts = $areaIds->mapWithKeys(
+                fn ($id) => [(int) $id => (int) ($directCounts[$id] ?? 0) + (int) ($viaRowCounts[$id] ?? 0)]
+            );
 
             $evidenceCounts = CriterionEvidence::query()
                 ->whereIn('area_id', $areaIds)
@@ -659,26 +680,27 @@ class AccreditationAreaController extends Controller
         $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before reviewing documents.');
         $progress = app(AreaProgressService::class);
 
-        $documents = Document::with(['uploader', 'versions', 'area', 'contentRow.parameter.area'])
+        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $page = Document::with(['uploader:id,first_name,middle_name,last_name,email', 'versions', 'area:id,code,name,progress_percent', 'contentRow.parameter.area:id,code,name,progress_percent'])
             ->forProgram((int) $program->id)
             ->pdfOnly()
             ->whereIn('status', ['Active', 'Draft'])
             ->orderByDesc('updated_at')
-            ->get()
-            ->map(function (Document $document) use ($request) {
-                $payload = (new DocumentResource($document))->toArray($request);
-                $area = $document->area ?: $document->contentRow?->parameter?->area;
-                $payload['source'] = 'document';
-                $payload['area'] = $area ? [
-                    'id' => $area->id,
-                    'code' => $area->code,
-                    'name' => $area->name,
-                    'progressPercent' => (int) ($area->progress_percent ?? 0),
-                ] : null;
+            ->paginate($perPage);
 
-                return $payload;
-            })
-            ->values();
+        $documents = collect($page->items())->map(function (Document $document) use ($request) {
+            $payload = (new DocumentResource($document))->toArray($request);
+            $area = $document->area ?: $document->contentRow?->parameter?->area;
+            $payload['source'] = 'document';
+            $payload['area'] = $area ? [
+                'id' => $area->id,
+                'code' => $area->code,
+                'name' => $area->name,
+                'progressPercent' => (int) ($area->progress_percent ?? 0),
+            ] : null;
+
+            return $payload;
+        })->values();
 
         return response()->json([
             'success' => true,
@@ -688,6 +710,12 @@ class AccreditationAreaController extends Controller
                 'programName' => $program->name,
                 'programCompletionRate' => $progress->programPercent($program),
                 'documents' => $documents,
+                'meta' => [
+                    'current_page' => $page->currentPage(),
+                    'last_page' => $page->lastPage(),
+                    'per_page' => $page->perPage(),
+                    'total' => $page->total(),
+                ],
             ],
         ], 200);
     }
@@ -878,7 +906,19 @@ class AccreditationAreaController extends Controller
         $accreditationArea->update(['deadline' => $validated['deadline']]);
         $accreditationArea->refresh();
 
-        app(AreaDeadlineReminderService::class)->sendForArea($accreditationArea, true);
+        $areaId = $accreditationArea->id;
+        dispatch(function () use ($areaId) {
+            $area = AccreditationArea::query()->find($areaId);
+            if ($area) {
+                app(AreaDeadlineReminderService::class)->sendForArea($area, true);
+            }
+        })->afterResponse();
+
+        $accreditationArea->loadMissing('cycle.program');
+        $programId = (int) ($accreditationArea->cycle?->program_id ?? 0);
+        if ($programId > 0) {
+            ScopedCache::bustProgram($programId, $accreditationArea->cycle?->program?->college_id);
+        }
 
         return response()->json([
             'success' => true,
@@ -973,33 +1013,55 @@ class AccreditationAreaController extends Controller
 
         DB::transaction(function () use ($accreditationArea, $userIds) {
             $accreditationArea->members()->delete();
-            foreach ($userIds as $userId) {
-                $accreditationArea->members()->create([
-                    'user_id' => $userId,
-                    'role' => 'member',
-                ]);
+            if ($userIds === []) {
+                return;
             }
+
+            $now = now();
+            $rows = array_map(fn (int $userId) => [
+                'area_id' => $accreditationArea->id,
+                'user_id' => $userId,
+                'role' => 'member',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $userIds);
+            AreaMember::query()->insert($rows);
         });
 
         $newMemberIds = array_values(array_diff($userIds, $previousIds));
         if ($newMemberIds !== []) {
-            $accreditationArea->loadMissing('cycle.program');
-            $assignedBy = $request->user();
-            User::whereIn('id', $newMemberIds)->get()->each(function (User $faculty) use ($accreditationArea, $assignedBy) {
-                $this->letters->issue(
-                    $faculty,
-                    $accreditationArea,
+            $assignedById = $request->user()->id;
+            $areaId = $accreditationArea->id;
+            foreach ($newMemberIds as $newMemberId) {
+                DispatchAfterResponse::job(new IssueDesignationLetterJob(
+                    $newMemberId,
+                    $areaId,
                     DesignationFile::ROLE_MEMBER,
-                    $assignedBy,
+                    $assignedById,
+                ));
+            }
+            dispatch(function () use ($newMemberIds, $areaId, $assignedById) {
+                $area = AccreditationArea::query()->with('cycle.program')->find($areaId);
+                $assignedBy = User::query()->find($assignedById);
+                if (! $area || ! $assignedBy) {
+                    return;
+                }
+                User::query()->whereIn('id', $newMemberIds)->get()->each(
+                    fn (User $faculty) => AreaAssignmentNotifier::notifyMember($faculty, $area, $assignedBy)
                 );
-                AreaAssignmentNotifier::notifyMember($faculty, $accreditationArea, $assignedBy);
-            });
+            })->afterResponse();
+        }
+
+        $fresh = $accreditationArea->fresh(['chair', 'members.user', 'cycle.program']);
+        $programId = (int) ($fresh?->cycle?->program_id ?? 0);
+        if ($programId > 0) {
+            ScopedCache::bustProgram($programId, $fresh?->cycle?->program?->college_id);
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Area members updated successfully.',
-            'data' => new AccreditationAreaResource($accreditationArea->fresh('chair', 'members.user')),
+            'data' => new AccreditationAreaResource($fresh),
         ], 200);
     }
 

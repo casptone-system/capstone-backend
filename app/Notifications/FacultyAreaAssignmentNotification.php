@@ -16,6 +16,7 @@ class FacultyAreaAssignmentNotification extends Notification implements ShouldQu
     public function __construct(array $data)
     {
         $this->data = $data;
+        $this->onQueue('mail');
     }
 
     public function via(object $notifiable): array

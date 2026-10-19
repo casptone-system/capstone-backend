@@ -8,8 +8,17 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class UserResource extends JsonResource
 {
+    /**
+     * Permission name lists are expensive (extra Spatie queries) and unused by
+     * dashboards. Opt in only for admin role-permission screens.
+     */
+    public bool $includePermissions = false;
+
     public function toArray(Request $request): array
     {
+        // Explicit load — safe under Model::preventLazyLoading().
+        $this->resource->loadMissing(['roles', 'college:id,name,code', 'program:id,name,code']);
+
         $roles = collect($this->getRoleNames())
             ->map(fn (string $name) => RoleSlug::canonicalize($name) ?? $name)
             ->filter()
@@ -19,7 +28,6 @@ class UserResource extends JsonResource
 
         $college = $this->college;
         $program = $this->program;
-        $team = $this->team;
 
         // `department` is a UI label only (there is no Department entity).
         // It is the college name when college_id is set, otherwise the program name.
@@ -44,7 +52,7 @@ class UserResource extends JsonResource
             'role' => $primaryRole,
             'role_slug' => $primaryRole,
             'roles' => $roles,
-            'permissions' => $this->getPermissionNames(),
+            'permissions' => $this->includePermissions ? $this->getPermissionNames() : [],
             'department' => $department,
             'status' => $trashed ? 'Inactive' : 'Active',
             'deletedAt' => $this->deleted_at?->toDateTimeString(),

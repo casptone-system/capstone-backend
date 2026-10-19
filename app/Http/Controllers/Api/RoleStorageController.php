@@ -443,9 +443,11 @@ class RoleStorageController extends Controller
 
         abort_unless($request->user()->id === $file->user_id, 403, 'You are not allowed to access this file.');
 
-        $response = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $file->file_path,
             $file->original_name ?: $file->name,
+            'inline',
             $file->mime_type
         );
 

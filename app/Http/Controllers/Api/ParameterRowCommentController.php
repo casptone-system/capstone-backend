@@ -19,12 +19,22 @@ class ParameterRowCommentController extends Controller
     {
         $this->authorize('viewComments', $parameterContentRow);
 
-        $comments = $parameterContentRow->comments()->with('author')->orderBy('id')->get();
+        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $comments = $parameterContentRow->comments()
+            ->with('author:id,first_name,middle_name,last_name,email')
+            ->orderBy('id')
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
             'message' => 'Comments retrieved successfully.',
-            'data' => ParameterRowCommentResource::collection($comments),
+            'data' => ParameterRowCommentResource::collection($comments->items()),
+            'meta' => [
+                'current_page' => $comments->currentPage(),
+                'last_page' => $comments->lastPage(),
+                'per_page' => $comments->perPage(),
+                'total' => $comments->total(),
+            ],
         ]);
     }
 

@@ -10,26 +10,27 @@ use App\Models\AccreditationRequirement;
 use App\Models\AccreditationWorkspace;
 use App\Models\AreaMember;
 use App\Models\CriterionEvidence;
+use App\Jobs\IssueDesignationLetterJob;
 use App\Models\DesignationFile;
 use App\Models\User;
 use App\Notifications\AreaInChargeAssignedNotification;
 use App\Services\AccreditationWorkspaceService;
-use App\Services\DesignationLetterService;
 use App\Services\EvidenceStorage;
 use App\Support\AreaAssignmentNotifier;
+use App\Support\DispatchAfterResponse;
 use App\Support\OrgScope;
 use App\Support\RoleSlug;
+use App\Support\ScopedCache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AccreditationWorkspaceController extends Controller
 {
     public function __construct(
         private AccreditationWorkspaceService $workspaces,
         private EvidenceStorage $evidenceStorage,
-        private DesignationLetterService $letters,
     ) {}
 
     public function index(Request $request)
@@ -116,19 +117,32 @@ class AccreditationWorkspaceController extends Controller
             abort(422, 'Select a faculty member from this program.');
         }
 
-        $area->update(['chair_id' => $candidate->id]);
-        if (! $candidate->isAreaIncharge()) {
-            $candidate->assignRole(RoleSlug::AREA_IN_CHARGE);
-        }
+        DB::transaction(function () use ($area, $candidate) {
+            $area->update(['chair_id' => $candidate->id]);
+            if (! $candidate->isAreaIncharge()) {
+                $candidate->assignRole(RoleSlug::AREA_IN_CHARGE);
+            }
+        });
+
         if ($previousChairId !== (int) $candidate->id) {
-            $this->letters->issue(
-                $candidate,
-                $area->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+            DispatchAfterResponse::job(new IssueDesignationLetterJob(
+                $candidate->id,
+                $area->id,
                 DesignationFile::ROLE_CHAIR,
-                $request->user(),
-            );
+                $request->user()?->id,
+            ));
+            $assigneeId = $candidate->id;
+            $areaId = $area->id;
+            dispatch(function () use ($assigneeId, $areaId) {
+                $user = User::query()->find($assigneeId);
+                $assignedArea = AccreditationArea::query()->with('cycle.program')->find($areaId);
+                if ($user && $assignedArea) {
+                    $user->notify(new AreaInChargeAssignedNotification($assignedArea));
+                }
+            })->afterResponse();
         }
-        $candidate->notify(new AreaInChargeAssignedNotification($area->fresh(['cycle.program'])));
+
+        ScopedCache::bustProgram((int) $workspace->program_id);
 
         return response()->json([
             'success' => true,
@@ -161,13 +175,25 @@ class AccreditationWorkspaceController extends Controller
             'role' => 'member',
         ]);
 
-        $this->letters->issue(
-            $candidate,
-            $area->fresh(['cycle.program.college', 'cycle.program.chairUser']),
+        DispatchAfterResponse::job(new IssueDesignationLetterJob(
+            $candidate->id,
+            $area->id,
             DesignationFile::ROLE_MEMBER,
-            $request->user(),
-        );
-        AreaAssignmentNotifier::notifyMember($candidate, $area->fresh(['cycle.program']), $request->user());
+            $request->user()?->id,
+        ));
+        $facultyId = $candidate->id;
+        $areaId = $area->id;
+        $assignedById = $request->user()->id;
+        dispatch(function () use ($facultyId, $areaId, $assignedById) {
+            $faculty = User::query()->find($facultyId);
+            $assignedArea = AccreditationArea::query()->with('cycle.program')->find($areaId);
+            $assignedBy = User::query()->find($assignedById);
+            if ($faculty && $assignedArea && $assignedBy) {
+                AreaAssignmentNotifier::notifyMember($faculty, $assignedArea, $assignedBy);
+            }
+        })->afterResponse();
+
+        ScopedCache::bustProgram((int) $workspace->program_id);
 
         return response()->json([
             'success' => true,
@@ -273,21 +299,21 @@ class AccreditationWorkspaceController extends Controller
         ]);
     }
 
-    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence): StreamedResponse|JsonResponse
+    public function downloadEvidence(Request $request, AccreditationWorkspace $workspace, int $evidence)
     {
         $this->assertCanView($request->user(), $workspace);
         $record = CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
 
-        $download = $this->evidenceStorage->download($record->file_path, $record->original_name);
-        if ($download) {
-            return $download;
-        }
+        $response = $this->evidenceStorage->respond(
+            $request,
+            $record->file_path,
+            $record->original_name,
+            'attachment',
+            $record->mime_type
+        );
 
-        $stream = $this->evidenceStorage->streamInline($record->file_path, $record->original_name, $record->mime_type);
-        if ($stream) {
-            $stream->headers->set('Content-Disposition', 'attachment; filename="'.$record->original_name.'"');
-
-            return $stream;
+        if ($response) {
+            return $response;
         }
 
         return response()->json([
@@ -301,14 +327,16 @@ class AccreditationWorkspaceController extends Controller
         $this->assertCanView($request->user(), $workspace);
         $record = CriterionEvidence::where('workspace_id', $workspace->id)->findOrFail($evidence);
 
-        $stream = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $record->file_path,
             $record->original_name,
+            'inline',
             $record->mime_type
         );
 
-        if ($stream) {
-            return $stream;
+        if ($response) {
+            return $response;
         }
 
         return response()->json([

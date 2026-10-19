@@ -17,7 +17,7 @@ class AreaAssignmentNotifier
     ): void {
         $area->loadMissing('cycle.program');
 
-        $faculty->notify(new FacultyAreaAssignmentNotification([
+        $faculty->notify((new FacultyAreaAssignmentNotification([
             'program_chair_name' => $assignedBy->name,
             'program_name' => $area->cycle?->program?->name ?? 'your program',
             'area_name' => $area->name,
@@ -25,6 +25,6 @@ class AreaAssignmentNotifier
             'deadline' => $deadline
                 ?: ($area->deadline?->format('Y-m-d') ?? now()->addDays(30)->format('Y-m-d')),
             'instructions' => $instructions ?? '',
-        ]));
+        ]))->onQueue('mail'));
     }
 }

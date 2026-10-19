@@ -27,6 +27,7 @@ use App\Http\Controllers\Api\QAController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\RoleStorageController;
+use App\Http\Controllers\Api\SyncCursorController;
 use App\Http\Controllers\Api\SystemController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskNotificationController;
@@ -53,6 +54,7 @@ Route::middleware(['security', 'audit.api'])->group(function () {
 Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->withoutMiddleware('verified.api');
     Route::get('/me', [AuthController::class, 'me'])->withoutMiddleware('verified.api');
+    Route::get('sync/cursor', [SyncCursorController::class, 'show']);
     Route::get('users/me/areas', [FacultyAreaContentController::class, 'myAreas']);
     Route::get('designation-files', [DesignationFileController::class, 'index']);
     Route::get('designation-files/{designationFile}/download', [DesignationFileController::class, 'download']);

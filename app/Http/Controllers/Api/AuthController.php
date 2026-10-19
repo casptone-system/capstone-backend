@@ -990,6 +990,9 @@ class AuthController extends Controller
             }
         }
 
+        // Keep /api/me lean: roles yes, Spatie permission name lists no (unused by dashboards).
+        $user->loadMissing(['college:id,name,code', 'program:id,name,code']);
+
         return response()->json([
             'success' => true,
             'data' => [

@@ -11,9 +11,21 @@ use App\Models\Program;
 use App\Models\User;
 use App\Support\ActiveCycle;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class AreaProgressService
 {
+    /**
+     * Section headings never count toward progress. Matched in SQL so we do not
+     * hydrate every ParameterContentRow on each request.
+     */
+    private const HEADING_CONTENTS = [
+        'IMPLEMENTATION',
+        'OUTCOME/S',
+        'OUTCOMES',
+        'SYSTEM-INPUTS AND PROCESSES',
+    ];
+
     /**
      * A content row is complete only when it is marked Done, has at least one
      * uploaded item, AND every item on the row is Approved by the Program Chair.
@@ -84,20 +96,14 @@ class AreaProgressService
             return $empty;
         }
 
-        $rowIds = ParameterContentRow::query()
-            ->whereHas('parameter', fn ($query) => $query->where('area_id', $area->id))
-            ->get()
-            ->reject(fn (ParameterContentRow $row) => $row->isSectionHeading())
-            ->pluck('id');
-
-        return $this->countsForRowIds($rowIds);
+        return $this->countsForAreaIds([(int) $area->id]);
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, int>  $rowIds
+     * @param  list<int>  $areaIds
      * @return array{total: int, completed: int, inProgress: int, pending: int, notStarted: int}
      */
-    private function countsForRowIds($rowIds): array
+    private function countsForAreaIds(array $areaIds): array
     {
         $empty = [
             'total' => 0,
@@ -107,41 +113,83 @@ class AreaProgressService
             'notStarted' => 0,
         ];
 
-        $rowIds = collect($rowIds)->filter()->values();
-        $total = $rowIds->count();
+        $areaIds = array_values(array_filter(array_map('intval', $areaIds)));
+        if ($areaIds === []) {
+            return $empty;
+        }
 
+        $headingList = collect(self::HEADING_CONTENTS)
+            ->map(fn (string $h) => "'".str_replace("'", "''", $h)."'")
+            ->implode(',');
+
+        // Normalize content the same way isSectionHeading() does for the common cases.
+        $normalized = "UPPER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(pcr.content, '–', '-'), '—', '-'), '−', '-'), '  ', ' ')))";
+
+        $rowIdsQuery = ParameterContentRow::query()
+            ->from('parameter_content_rows as pcr')
+            ->join('accreditation_parameters as ap', 'ap.id', '=', 'pcr.parameter_id')
+            ->whereIn('ap.area_id', $areaIds)
+            ->whereRaw("{$normalized} NOT IN ({$headingList})")
+            ->select('pcr.id');
+
+        $total = (clone $rowIdsQuery)->count();
         if ($total === 0) {
             return $empty;
         }
 
-        $uploadedRowIds = Document::query()
-            ->whereIn('content_row_id', $rowIds)
+        $uploaded = Document::query()
+            ->whereIn('content_row_id', $rowIdsQuery)
             ->whereNotNull('content_row_id')
-            ->pluck('content_row_id')
-            ->unique();
+            ->distinct()
+            ->count('content_row_id');
 
-        $doneRowIds = ParameterRowStatus::query()
-            ->whereIn('content_row_id', $rowIds)
+        $done = ParameterRowStatus::query()
+            ->whereIn('content_row_id', $rowIdsQuery)
             ->where('is_done', true)
-            ->pluck('content_row_id')
-            ->unique();
+            ->distinct()
+            ->count('content_row_id');
 
-        $unapprovedRowIds = Document::query()
-            ->whereIn('content_row_id', $rowIds)
-            ->whereNotNull('content_row_id')
-            ->where('status', '!=', 'Approved')
-            ->pluck('content_row_id')
-            ->unique();
-
-        $approvedRowIds = $uploadedRowIds->diff($unapprovedRowIds);
-        $doneAndUploaded = $doneRowIds->intersect($uploadedRowIds);
-
-        $completed = $doneAndUploaded->intersect($approvedRowIds)->count();
-        $pending = $doneAndUploaded->diff($approvedRowIds)->count();
-        $inProgress = $doneRowIds->diff($uploadedRowIds)
-            ->merge($uploadedRowIds->diff($doneRowIds))
-            ->unique()
+        // Completed = done ∩ uploaded ∩ fully approved (no unapproved docs on row).
+        $completed = (int) DB::table('parameter_content_rows as pcr')
+            ->join('accreditation_parameters as ap', 'ap.id', '=', 'pcr.parameter_id')
+            ->join('parameter_row_statuses as prs', function ($join) {
+                $join->on('prs.content_row_id', '=', 'pcr.id')
+                    ->where('prs.is_done', '=', true);
+            })
+            ->whereIn('ap.area_id', $areaIds)
+            ->whereRaw("{$normalized} NOT IN ({$headingList})")
+            ->whereExists(function ($q) {
+                $q->select(DB::raw(1))
+                    ->from('documents as d')
+                    ->whereColumn('d.content_row_id', 'pcr.id');
+            })
+            ->whereNotExists(function ($q) {
+                $q->select(DB::raw(1))
+                    ->from('documents as d2')
+                    ->whereColumn('d2.content_row_id', 'pcr.id')
+                    ->where('d2.status', '!=', 'Approved');
+            })
             ->count();
+
+        $doneAndUploaded = (int) DB::table('parameter_content_rows as pcr')
+            ->join('accreditation_parameters as ap', 'ap.id', '=', 'pcr.parameter_id')
+            ->join('parameter_row_statuses as prs', function ($join) {
+                $join->on('prs.content_row_id', '=', 'pcr.id')
+                    ->where('prs.is_done', '=', true);
+            })
+            ->whereIn('ap.area_id', $areaIds)
+            ->whereRaw("{$normalized} NOT IN ({$headingList})")
+            ->whereExists(function ($q) {
+                $q->select(DB::raw(1))
+                    ->from('documents as d')
+                    ->whereColumn('d.content_row_id', 'pcr.id');
+            })
+            ->count();
+
+        $pending = max(0, $doneAndUploaded - $completed);
+
+        // inProgress = (done - uploaded) ∪ (uploaded - done); those sets are disjoint.
+        $inProgress = max(0, $done - $doneAndUploaded) + max(0, $uploaded - $doneAndUploaded);
 
         return [
             'total' => $total,
@@ -169,17 +217,9 @@ class AreaProgressService
     public function workloadForAreas($areas): array
     {
         $areas = collect($areas);
-        $areaIds = $areas->pluck('id')->filter()->values();
+        $areaIds = $areas->pluck('id')->filter()->map(fn ($id) => (int) $id)->values()->all();
+        $totals = $this->countsForAreaIds($areaIds);
 
-        $rowIds = $areaIds->isEmpty()
-            ? collect()
-            : ParameterContentRow::query()
-                ->whereHas('parameter', fn ($query) => $query->whereIn('area_id', $areaIds))
-                ->get()
-                ->reject(fn (ParameterContentRow $row) => $row->isSectionHeading())
-                ->pluck('id');
-
-        $totals = $this->countsForRowIds($rowIds);
         $progressPercent = $totals['total'] === 0
             ? 0
             : (int) round(($totals['completed'] / $totals['total']) * 100);

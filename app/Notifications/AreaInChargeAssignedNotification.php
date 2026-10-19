@@ -14,6 +14,7 @@ class AreaInChargeAssignedNotification extends Notification implements ShouldQue
 
     public function __construct(public AccreditationArea $area)
     {
+        $this->onQueue('mail');
     }
 
     public function via(object $notifiable): array

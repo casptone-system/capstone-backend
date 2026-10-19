@@ -31,18 +31,17 @@ class DesignationFileController extends Controller
             'You can only download your own designation files.'
         );
 
-        $contents = $this->storage->getContents((string) $designationFile->file_path);
-        abort_if($contents === null, 404, 'This designation file is no longer available.');
-
         $filename = $designationFile->original_name ?: 'designation.pdf';
+        $response = $this->storage->respond(
+            $request,
+            (string) $designationFile->file_path,
+            $filename,
+            'attachment',
+            'application/pdf'
+        );
+        abort_if($response === null, 404, 'This designation file is no longer available.');
 
-        return response($contents, 200, [
-            'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
-            'Content-Length' => (string) strlen($contents),
-            'Cache-Control' => 'private, max-age=0, must-revalidate',
-            'Pragma' => 'public',
-        ]);
+        return $response;
     }
 }
 

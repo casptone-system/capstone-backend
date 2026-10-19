@@ -3,7 +3,11 @@
 namespace App\Services;
 
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -165,6 +169,100 @@ class EvidenceStorage
         return Storage::disk($disk)->download($path, $name, $headers);
     }
 
+    public function temporaryUrlTtlSeconds(): int
+    {
+        return max(15, (int) config('filesystems.evidence_temporary_url_seconds', 60));
+    }
+
+    /**
+     * Short-lived private object URL (S3/R2/Supabase). Null for local disks
+     * or when signing fails — callers must fall back to stream/download.
+     */
+    public function temporaryUrl(
+        string $path,
+        string $disposition = 'attachment',
+        ?string $mimeType = null,
+        ?string $downloadName = null,
+    ): ?string {
+        $diskName = $this->locate($path);
+
+        if ($diskName === null || in_array($diskName, ['local', 'private'], true)) {
+            return null;
+        }
+
+        $ttl = $this->temporaryUrlTtlSeconds();
+        $expires = now()->addSeconds($ttl);
+        $filename = $this->safeFilename($downloadName ?: basename($path));
+        $dispositionHeader = $disposition === 'inline'
+            ? 'inline; filename="'.$filename.'"'
+            : 'attachment; filename="'.$filename.'"';
+
+        try {
+            if ($diskName === 'supabase') {
+                return $this->supabaseSignedUrl($path, $ttl);
+            }
+
+            $options = [
+                'ResponseContentDisposition' => $dispositionHeader,
+            ];
+            if ($mimeType) {
+                $options['ResponseContentType'] = $mimeType;
+            }
+
+            return Storage::disk($diskName)->temporaryUrl($path, $expires, $options);
+        } catch (\Throwable $exception) {
+            Log::warning('Evidence temporary URL could not be created; falling back to proxy stream.', [
+                'disk' => $diskName,
+                'path' => $path,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * After Policy authorization: prefer a presigned URL (JSON or 302), else proxy bytes.
+     *
+     * @return JsonResponse|RedirectResponse|StreamedResponse|\Symfony\Component\HttpFoundation\BinaryFileResponse|\Illuminate\Http\Response|null
+     */
+    public function respond(
+        Request $request,
+        string $path,
+        string $downloadName,
+        string $disposition = 'attachment',
+        ?string $mimeType = null,
+    ) {
+        if (! $this->exists($path)) {
+            return null;
+        }
+
+        $url = $this->temporaryUrl($path, $disposition, $mimeType, $downloadName);
+
+        // Opt-in only: axios blob clients must send ?presign=1 (Bearer must not follow
+        // a 302 to S3). Without it, keep proxying so older clients keep working.
+        if ($url && $request->boolean('presign')) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'url' => $url,
+                    'expires_in' => $this->temporaryUrlTtlSeconds(),
+                    'disposition' => $disposition,
+                ],
+            ]);
+        }
+
+        if ($url && $request->boolean('redirect')) {
+            return redirect()->away($url);
+        }
+
+        if ($disposition === 'inline') {
+            return $this->streamInline($path, $downloadName, $mimeType);
+        }
+
+        return $this->download($path, $downloadName);
+    }
+
     public function streamInline(string $path, string $name, ?string $mimeType = null): ?StreamedResponse
     {
         $diskName = $this->locate($path);
@@ -200,6 +298,41 @@ class EvidenceStorage
                 fclose($stream);
             }
         }, 200, $headers);
+    }
+
+    private function supabaseSignedUrl(string $path, int $ttlSeconds): ?string
+    {
+        $config = config('filesystems.disks.supabase', []);
+        $base = rtrim((string) ($config['url'] ?? ''), '/');
+        $key = (string) ($config['key'] ?? '');
+        $bucket = (string) ($config['bucket'] ?? '');
+
+        if ($base === '' || $key === '' || $bucket === '') {
+            return null;
+        }
+
+        $response = Http::withToken($key)
+            ->withHeaders(['apikey' => $key])
+            ->acceptJson()
+            ->timeout(8)
+            ->post($base.'/storage/v1/object/sign/'.$bucket.'/'.ltrim($path, '/'), [
+                'expiresIn' => $ttlSeconds,
+            ]);
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $signed = $response->json('signedURL') ?? $response->json('signedUrl');
+        if (! is_string($signed) || $signed === '') {
+            return null;
+        }
+
+        if (str_starts_with($signed, 'http://') || str_starts_with($signed, 'https://')) {
+            return $signed;
+        }
+
+        return $base.'/storage/v1'.(str_starts_with($signed, '/') ? $signed : '/'.$signed);
     }
 
     public function checksum(string $path, ?string $disk = null): string

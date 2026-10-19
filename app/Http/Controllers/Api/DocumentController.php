@@ -505,18 +505,27 @@ class DocumentController extends Controller
 
         $version = $document->versions()->where('version', $versionNumber)->firstOrFail();
 
-        if (! $this->evidenceStorage->exists($version->file_path)) {
+        $response = $this->evidenceStorage->respond(
+            $request,
+            $version->file_path,
+            $version->original_name,
+            'attachment',
+            $version->mime_type
+        );
+
+        if ($response === null) {
             return response()->json([
                 'success' => false,
                 'message' => 'File not found.',
             ], 404);
         }
 
-        return $this->evidenceStorage->download($version->file_path, $version->original_name);
+        return $response;
     }
 
     /**
      * Stream a previewable version inline (PDF, image, audio, video).
+     * With ?presign=1 on S3/Supabase, returns a short-lived URL (Range-capable).
      */
     public function preview(Request $request, Document $document)
     {
@@ -539,9 +548,11 @@ class DocumentController extends Controller
             ], 415);
         }
 
-        $response = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $version->file_path,
             $version->original_name,
+            'inline',
             $version->mime_type
         );
 

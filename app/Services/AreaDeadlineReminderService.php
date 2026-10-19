@@ -42,7 +42,9 @@ class AreaDeadlineReminderService
             return 0;
         }
 
-        $percent = app(AreaProgressService::class)->refresh($area);
+        // Read stored progress; only recompute when never computed. Assignment/deadline
+        // paths must not recount every content row on the request.
+        $percent = app(AreaProgressService::class)->storedOrRefresh($area);
         if ($percent >= 100) {
             return 0;
         }

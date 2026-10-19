@@ -29,6 +29,12 @@ return [
 
     'evidence_disk' => env('EVIDENCE_DISK', 'local'),
 
+    /*
+    | Short-lived private object URLs for download/preview (Phase 5).
+    | Only used when EVIDENCE_DISK is s3/supabase and the client asks ?presign=1.
+    */
+    'evidence_temporary_url_seconds' => (int) env('EVIDENCE_TEMPORARY_URL_SECONDS', 60),
+
     'document_upload_max_kb' => (int) env('DOCUMENT_UPLOAD_MAX_KB', 51200),
 
     'area_document_upload_max_kb' => (int) env('AREA_DOCUMENT_UPLOAD_MAX_KB', 10240),

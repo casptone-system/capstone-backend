@@ -419,7 +419,13 @@ class FileRequestController extends Controller
         $this->authorize('download', $fileRequest);
         abort_unless((int) $fileRequestFile->file_request_id === (int) $fileRequest->id, 404);
 
-        $response = $this->evidenceStorage->download($fileRequestFile->file_path, $fileRequestFile->original_name);
+        $response = $this->evidenceStorage->respond(
+            $request,
+            $fileRequestFile->file_path,
+            $fileRequestFile->original_name,
+            'attachment',
+            'application/pdf'
+        );
         abort_if($response === null, 404, 'File not found.');
 
         $request->attributes->set('audit_event', 'file_request_downloaded');
@@ -432,9 +438,11 @@ class FileRequestController extends Controller
         $this->authorize('download', $fileRequest);
         abort_unless((int) $fileRequestFile->file_request_id === (int) $fileRequest->id, 404);
 
-        $response = $this->evidenceStorage->streamInline(
+        $response = $this->evidenceStorage->respond(
+            $request,
             $fileRequestFile->file_path,
             $fileRequestFile->original_name,
+            'inline',
             'application/pdf'
         );
         abort_if($response === null, 404, 'File not found.');
