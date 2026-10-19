@@ -50,6 +50,9 @@ return [
             'timeout' => (int) env('MAIL_TIMEOUT', 20),
             'auth_mode' => env('MAIL_AUTH_MODE'),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Windows PHP often lacks an up-to-date CA bundle; set MAIL_VERIFY_PEER=false locally.
+            // Keep true in production so SMTP TLS peer verification stays enforced.
+            'verify_peer' => filter_var(env('MAIL_VERIFY_PEER', true), FILTER_VALIDATE_BOOL),
         ],
 
         'ses' => [
