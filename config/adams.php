@@ -59,4 +59,10 @@ return [
     'two_factor_resend_cooldown_seconds' => 30,
     'two_factor_max_resends' => 3,
     'email_resend_cooldown_seconds' => 60,
+
+    // After OTP (or a direct login), browsers keep a device token so the next
+    // sign-in on that same browser can skip the email code. New devices still
+    // require full login + OTP.
+    'trusted_device_ttl_days' => max(1, (int) env('AUTH_TRUSTED_DEVICE_TTL_DAYS', 90)),
+    'trusted_device_max_per_user' => max(1, (int) env('AUTH_TRUSTED_DEVICE_MAX', 10)),
 ];

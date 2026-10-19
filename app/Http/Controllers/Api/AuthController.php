@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\ProgramMember;
 use App\Models\TeamJoinCode;
+use App\Models\TrustedDevice;
 use App\Models\User;
 use App\Notifications\LoginVerificationCodeNotification;
 use App\Support\LoginChallenge;
@@ -29,92 +30,114 @@ class AuthController extends Controller
 {
     public function login(Request $request)
     {
-    $validated = $request->validate([
-        'email' => ['required', 'email'],
-        'password' => ['required', 'string'],
-    ]);
-
-    /** @var User|null $user */
-    $user = User::where('email', $validated['email'])->first();
-
-    // Account does not exist
-    if (!$user) {
-        throw ValidationException::withMessages([
-            'email' => ['No existing account found for that email.'],
+        $validated = $request->validate([
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string'],
+            'device_token' => ['nullable', 'string', 'max:128'],
+            'trust_device' => ['sometimes', 'boolean'],
         ]);
-    }
 
-    // IP-based login throttle: limit attempts per IP per minute
-    $ip = $request->ip() ?? 'unknown';
-    $ipKey = 'login_ip_attempts:' . $ip;
-    $ipCount = (int) Cache::get($ipKey, 0);
-    $ipLimit = $this->getLoginIpLimitPerMinute();
-    if ($ipCount >= $ipLimit) {
-        throw ValidationException::withMessages([
-            'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
-        ]);
-    }
-    Cache::put($ipKey, $ipCount + 1, 60);
+        /** @var User|null $user */
+        $user = User::where('email', $validated['email'])->first();
 
-    // Check password directly
-    if (!Hash::check($validated['password'], $user->password)) {
-        throw ValidationException::withMessages([
-            'password' => ['Wrong credentials.'],
-        ]);
-    }
-
-    // Optional: prevent inactive/locked accounts from logging in
-    if (isset($user->status) && $user->status === 'inactive') {
-        throw ValidationException::withMessages([
-            'email' => ['This account is inactive.'],
-        ]);
-    }
-
-    if (isset($user->status) && $user->status === 'locked') {
-        throw ValidationException::withMessages([
-            'email' => ['This account is locked. Please contact an administrator.'],
-        ]);
-    }
-
-    if ($this->requiresTwoFactor($user)) {
-        if ($lockout = LoginChallenge::lockoutMessage((int) $user->id)) {
+        // Account does not exist
+        if (! $user) {
             throw ValidationException::withMessages([
-                'email' => [$lockout],
+                'email' => ['No existing account found for that email.'],
             ]);
         }
 
-        try {
-            $challenge = LoginChallenge::issue($user);
-        } catch (\Throwable $exception) {
-            return response()->json([
-                'success' => false,
-                'message' => 'We could not send the verification code. Try again in a few minutes.',
-            ], 503);
+        // IP-based login throttle: limit attempts per IP per minute
+        $ip = $request->ip() ?? 'unknown';
+        $ipKey = 'login_ip_attempts:'.$ip;
+        $ipCount = (int) Cache::get($ipKey, 0);
+        $ipLimit = $this->getLoginIpLimitPerMinute();
+        if ($ipCount >= $ipLimit) {
+            throw ValidationException::withMessages([
+                'email' => ['Too many login attempts from your IP address. Please wait and try again.'],
+            ]);
+        }
+        Cache::put($ipKey, $ipCount + 1, 60);
+
+        // Check password directly
+        if (! Hash::check($validated['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'password' => ['Wrong credentials.'],
+            ]);
         }
 
-        $request->attributes->set('audit_event', '2fa_challenge_sent');
+        // Optional: prevent inactive/locked accounts from logging in
+        if (isset($user->status) && $user->status === 'inactive') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is inactive.'],
+            ]);
+        }
 
-        return response()->json([
-            'success' => true,
-            'message' => 'A verification code was sent to your email.',
-            'data' => [
-                'challenge_token' => $challenge['challenge_token'],
-                'email' => $user->email,
-                'expires_in' => $challenge['expires_in'],
-            ],
-        ], 200);
+        if (isset($user->status) && $user->status === 'locked') {
+            throw ValidationException::withMessages([
+                'email' => ['This account is locked. Please contact an administrator.'],
+            ]);
+        }
+
+        $deviceToken = isset($validated['device_token']) ? trim((string) $validated['device_token']) : '';
+        $trustedDevice = $deviceToken !== ''
+            ? TrustedDevice::findActive($deviceToken, $user)
+            : null;
+
+        if ($trustedDevice) {
+            $trustedDevice->touchLastUsed($request->ip(), $request->userAgent());
+            $request->attributes->set('audit_event', 'login_trusted_device');
+
+            return $this->issueAuthenticatedSession(
+                $user,
+                trustDevice: (bool) ($validated['trust_device'] ?? true),
+                existingDeviceToken: $deviceToken
+            );
+        }
+
+        if ($this->requiresTwoFactor($user)) {
+            if ($lockout = LoginChallenge::lockoutMessage((int) $user->id)) {
+                throw ValidationException::withMessages([
+                    'email' => [$lockout],
+                ]);
+            }
+
+            try {
+                $challenge = LoginChallenge::issue($user);
+            } catch (\Throwable $exception) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'We could not send the verification code. Try again in a few minutes.',
+                ], 503);
+            }
+
+            $request->attributes->set('audit_event', '2fa_challenge_sent');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'A verification code was sent to your email.',
+                'data' => [
+                    'challenge_token' => $challenge['challenge_token'],
+                    'email' => $user->email,
+                    'expires_in' => $challenge['expires_in'],
+                ],
+            ], 200);
+        }
+
+        $request->attributes->set('audit_event', 'login');
+
+        return $this->issueAuthenticatedSession(
+            $user,
+            trustDevice: (bool) ($validated['trust_device'] ?? true)
+        );
     }
-
-    $request->attributes->set('audit_event', 'login');
-
-    return $this->issueAuthenticatedSession($user);
-}
 
     public function verifyTwoFactor(Request $request)
     {
         $validated = $request->validate([
             'challenge_token' => ['required', 'string'],
             'code' => ['required', 'string', 'size:6'],
+            'trust_device' => ['sometimes', 'boolean'],
         ]);
 
         $challenge = LoginChallenge::get($validated['challenge_token']);
@@ -177,23 +200,43 @@ class AuthController extends Controller
 
         $request->attributes->set('audit_event', '2fa_success');
 
-        return $this->issueAuthenticatedSession($user);
+        return $this->issueAuthenticatedSession(
+            $user,
+            trustDevice: (bool) ($validated['trust_device'] ?? true)
+        );
     }
 
-    private function issueAuthenticatedSession(User $user)
+    private function issueAuthenticatedSession(User $user, bool $trustDevice = true, ?string $existingDeviceToken = null)
     {
         $user->forceFill(['last_login_at' => now()])->save();
         request()->setUserResolver(static fn () => $user);
 
         $token = $user->createToken('api-token')->plainTextToken;
+        $deviceToken = $existingDeviceToken;
+
+        if ($trustDevice && ($deviceToken === null || $deviceToken === '')) {
+            $issued = TrustedDevice::issueFor(
+                $user,
+                request()->ip(),
+                request()->userAgent()
+            );
+            $deviceToken = $issued['plain_token'];
+        }
+
+        $data = [
+            'token' => $token,
+            'user' => new UserResource($user),
+        ];
+
+        if ($deviceToken) {
+            $data['device_token'] = $deviceToken;
+            $data['device_expires_in_days'] = (int) config('adams.trusted_device_ttl_days', 90);
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Authenticated successfully.',
-            'data' => [
-                'token' => $token,
-                'user' => new UserResource($user),
-            ],
+            'data' => $data,
         ], 200);
     }
 
@@ -661,6 +704,8 @@ class AuthController extends Controller
                 $user->password = Hash::make($password);
                 $user->setRememberToken(Str::random(60));
                 $user->save();
+                $user->tokens()->delete();
+                TrustedDevice::revokeAllForUser($user);
                 event(new PasswordReset($user));
             }
         );
@@ -995,6 +1040,8 @@ class AuthController extends Controller
         $user->password = $validated['password'];
         $user->setRememberToken(Str::random(60));
         $user->save();
+        $user->tokens()->delete();
+        TrustedDevice::revokeAllForUser($user);
 
         $request->attributes->set('audit_event', 'password_changed');
 

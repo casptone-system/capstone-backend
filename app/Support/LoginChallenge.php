@@ -37,6 +37,22 @@ final class LoginChallenge
         try {
             $user->notify(new LoginVerificationCodeNotification($code, (int) max(1, (int) ceil($ttl / 60))));
         } catch (\Throwable $exception) {
+            // Local/testing: keep the challenge and surface the code in logs so
+            // SMTP outages do not block sign-in during development.
+            if (app()->environment(['local', 'testing'])) {
+                Log::warning('Login verification email failed; using logged code for local sign-in', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'code' => $code,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return [
+                    'challenge_token' => $token,
+                    'expires_in' => $ttl,
+                ];
+            }
+
             self::forget($token);
             Log::error('Login verification email failed', [
                 'user_id' => $user->id,

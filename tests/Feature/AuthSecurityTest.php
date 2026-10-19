@@ -83,7 +83,107 @@ class AuthSecurityTest extends TestCase
         $this->postJson('/api/auth/verify-2fa', [
             'challenge_token' => $challenge,
             'code' => $this->sentCode($user),
-        ])->assertOk()->assertJsonStructure(['data' => ['token']]);
+        ])->assertOk()->assertJsonStructure(['data' => ['token', 'device_token']]);
+    }
+
+    public function test_trusted_device_skips_otp_on_the_next_login(): void
+    {
+        Notification::fake();
+        $user = $this->userWithRole(RoleSlug::DEAN);
+
+        $login = $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'password',
+            'trust_device' => true,
+        ])->assertOk();
+
+        $verified = $this->postJson('/api/auth/verify-2fa', [
+            'challenge_token' => $login->json('data.challenge_token'),
+            'code' => $this->sentCode($user),
+            'trust_device' => true,
+        ])->assertOk();
+
+        $deviceToken = $verified->json('data.device_token');
+        $this->assertNotEmpty($deviceToken);
+        Notification::assertSentTo($user, LoginVerificationCodeNotification::class);
+
+        Notification::fake();
+
+        $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'password',
+            'device_token' => $deviceToken,
+            'trust_device' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.challenge_token', null)
+            ->assertJsonStructure(['data' => ['token', 'device_token']]);
+
+        Notification::assertNothingSent();
+    }
+
+    public function test_new_device_still_requires_otp_after_another_device_is_trusted(): void
+    {
+        Notification::fake();
+        $user = $this->userWithRole(RoleSlug::QA);
+
+        $login = $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ])->assertOk();
+
+        $this->postJson('/api/auth/verify-2fa', [
+            'challenge_token' => $login->json('data.challenge_token'),
+            'code' => $this->sentCode($user),
+            'trust_device' => true,
+        ])->assertOk();
+
+        Notification::fake();
+
+        $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ])->assertOk()
+            ->assertJsonPath('data.token', null)
+            ->assertJsonStructure(['data' => ['challenge_token']]);
+
+        Notification::assertSentTo($user, LoginVerificationCodeNotification::class);
+    }
+
+    public function test_password_reset_revokes_trusted_devices(): void
+    {
+        Notification::fake();
+        $user = $this->userWithRole(RoleSlug::DEAN);
+
+        $login = $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'password',
+        ])->assertOk();
+
+        $deviceToken = $this->postJson('/api/auth/verify-2fa', [
+            'challenge_token' => $login->json('data.challenge_token'),
+            'code' => $this->sentCode($user),
+            'trust_device' => true,
+        ])->assertOk()->json('data.device_token');
+
+        $resetToken = Password::createToken($user);
+        $this->postJson('/api/auth/reset-password', [
+            'token' => $resetToken,
+            'email' => $user->email,
+            'password' => 'Newpassword1',
+            'password_confirmation' => 'Newpassword1',
+        ])->assertOk();
+
+        Notification::fake();
+
+        $this->postJson('/api/login', [
+            'email' => $user->email,
+            'password' => 'Newpassword1',
+            'device_token' => $deviceToken,
+        ])->assertOk()
+            ->assertJsonPath('data.token', null)
+            ->assertJsonStructure(['data' => ['challenge_token']]);
+
+        Notification::assertSentTo($user, LoginVerificationCodeNotification::class);
     }
 
     public function test_expired_challenge_is_rejected(): void

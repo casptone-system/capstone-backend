@@ -9,6 +9,7 @@ use App\Models\College;
 use App\Models\LoginHistory;
 use App\Models\Program;
 use App\Models\Team;
+use App\Models\TrustedDevice;
 use App\Models\User;
 use App\Support\LoginChallenge;
 use App\Support\RoleSlug;
@@ -1187,6 +1188,7 @@ class UserController extends Controller
         $user = User::findOrFail($id);
         LoginChallenge::forgetForUser((int) $user->id);
         LoginChallenge::clearLockout((int) $user->id);
+        TrustedDevice::revokeAllForUser($user);
 
         AuditLog::create([
             'user_id' => $actor->id,
@@ -1198,7 +1200,7 @@ class UserController extends Controller
             'ip_address' => $request->ip(),
         ]);
 
-        return response()->json(['success' => true, 'message' => 'Pending sign-in codes cleared.']);
+        return response()->json(['success' => true, 'message' => 'Pending sign-in codes and trusted devices cleared.']);
     }
 
     public function roles(Request $request)

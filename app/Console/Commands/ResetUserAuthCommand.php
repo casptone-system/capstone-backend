@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\AuditLog;
+use App\Models\TrustedDevice;
 use App\Models\User;
 use App\Support\LoginChallenge;
 use Illuminate\Console\Command;
@@ -27,6 +28,8 @@ class ResetUserAuthCommand extends Command
         $user->forceFill(['email_verified_at' => $user->email_verified_at ?? now()])->save();
         LoginChallenge::forgetForUser((int) $user->id);
         LoginChallenge::clearLockout((int) $user->id);
+        TrustedDevice::revokeAllForUser($user);
+        $user->tokens()->delete();
 
         AuditLog::create([
             'user_id' => $user->id,

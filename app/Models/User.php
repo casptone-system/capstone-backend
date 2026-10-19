@@ -69,6 +69,11 @@ class User extends Authenticatable
         return $this->hasMany(Task::class, 'created_by');
     }
 
+    public function trustedDevices(): HasMany
+    {
+        return $this->hasMany(TrustedDevice::class);
+    }
+
     public function team()
     {
         return $this->belongsTo(Team::class, 'team_id');
