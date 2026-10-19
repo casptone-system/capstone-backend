@@ -30,6 +30,7 @@ use App\Support\AreaEvidenceGate;
 use App\Support\DispatchAfterResponse;
 use App\Support\OrgScope;
 use App\Support\RoleGate;
+use App\Support\RoleSlug;
 use App\Support\ScopedCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -534,6 +535,130 @@ class AccreditationAreaController extends Controller
                 'lockedToActiveLevel' => $user->isLockedToProgramActiveLevel(),
                 'programCompletionRate' => app(AreaProgressService::class)->programPercent($prepared['program']),
                 'levels' => $levels->values(),
+            ],
+        ], 200);
+    }
+
+    /**
+     * Workload distribution across users in the Program Chair's program.
+     * Built from real area chair / member assignments on the active cycle.
+     */
+    public function workDistribution(Request $request)
+    {
+        $user = $request->user() ?? $request->user('api');
+        if (! $user || ! $user->isProgramChair()) {
+            abort(403, 'Only a Program Chair can view work distribution.');
+        }
+
+        $program = $this->resolveVisibleProgram($request, $user, 'You need a program assigned before viewing work distribution.');
+        $progress = app(AreaProgressService::class);
+        $areas = $progress->activeAreasForProgram($program)
+            ->load(['chair', 'members.user']);
+
+        $faculty = User::query()
+            ->where('users.program_id', $program->id)
+            ->whereHas('roles', function ($roleQuery) {
+                $roleQuery->whereIn('name', [RoleSlug::FACULTY, RoleSlug::AREA_IN_CHARGE, RoleSlug::PROGRAM_CHAIR]);
+            })
+            ->with('roles')
+            ->orderBy('name')
+            ->get(['id', 'name', 'email', 'sex', 'program_id']);
+
+        if (! $faculty->contains(fn (User $person) => (int) $person->id === (int) $user->id)) {
+            $faculty = $faculty->prepend($user->loadMissing('roles'));
+        }
+
+        $chairAreaIdsByUser = [];
+        $memberAreaIdsByUser = [];
+        $areaLookup = [];
+
+        foreach ($areas as $area) {
+            $areaLookup[$area->id] = $area;
+            if ($area->chair_id) {
+                $chairAreaIdsByUser[(int) $area->chair_id][] = (int) $area->id;
+            }
+            foreach ($area->members as $member) {
+                $memberAreaIdsByUser[(int) $member->user_id][] = (int) $area->id;
+            }
+        }
+
+        $users = $faculty->map(function (User $person) use ($chairAreaIdsByUser, $memberAreaIdsByUser, $areaLookup, $progress) {
+            $chairIds = array_values(array_unique($chairAreaIdsByUser[(int) $person->id] ?? []));
+            $memberIds = array_values(array_unique($memberAreaIdsByUser[(int) $person->id] ?? []));
+            $allIds = array_values(array_unique(array_merge($chairIds, $memberIds)));
+            $assignedAreas = collect($allIds)->map(function (int $areaId) use ($areaLookup, $chairIds) {
+                $area = $areaLookup[$areaId] ?? null;
+                if (! $area) {
+                    return null;
+                }
+
+                return [
+                    'id' => $area->id,
+                    'code' => $area->code,
+                    'name' => $area->name,
+                    'role' => in_array($areaId, $chairIds, true) ? 'chair' : 'member',
+                    'progressPercent' => (int) ($area->progress_percent ?? 0),
+                ];
+            })->filter()->values()->all();
+
+            $workloadAreas = collect($allIds)
+                ->map(fn (int $id) => $areaLookup[$id] ?? null)
+                ->filter();
+            $workload = $progress->workloadForAreas($workloadAreas);
+
+            return [
+                'id' => $person->id,
+                'name' => $person->name,
+                'email' => $person->email,
+                'sex' => in_array($person->sex, ['male', 'female'], true) ? $person->sex : null,
+                'role' => $person->roles->pluck('name')->first() ?: 'Faculty',
+                'chairAreaCount' => count($chairIds),
+                'memberAreaCount' => count($memberIds),
+                'totalAssignments' => count($allIds),
+                'areas' => $assignedAreas,
+                'workload' => [
+                    'total' => $workload['total'],
+                    'completed' => $workload['completed'],
+                    'pendingReviews' => $workload['pendingReviews'],
+                    'progressPercent' => $workload['progressPercent'],
+                ],
+            ];
+        })->sortByDesc('totalAssignments')->values();
+
+        $bySex = [
+            'male' => ['people' => 0, 'assignments' => 0],
+            'female' => ['people' => 0, 'assignments' => 0],
+            'unset' => ['people' => 0, 'assignments' => 0],
+        ];
+
+        foreach ($users as $row) {
+            $key = $row['sex'] ?: 'unset';
+            if (! isset($bySex[$key])) {
+                $key = 'unset';
+            }
+            $bySex[$key]['people']++;
+            $bySex[$key]['assignments'] += (int) $row['totalAssignments'];
+        }
+
+        $areasWithChair = $areas->whereNotNull('chair_id')->count();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Program work distribution retrieved successfully.',
+            'data' => [
+                'programId' => $program->id,
+                'programName' => $program->name,
+                'activeLevel' => AccreditationCycle::currentLevelFor($program),
+                'users' => $users,
+                'bySex' => $bySex,
+                'summary' => [
+                    'facultyCount' => $users->count(),
+                    'assignedFacultyCount' => $users->where('totalAssignments', '>', 0)->count(),
+                    'unassignedFacultyCount' => $users->where('totalAssignments', 0)->count(),
+                    'areasWithChair' => $areasWithChair,
+                    'totalAreas' => $areas->count(),
+                    'totalAssignments' => (int) $users->sum('totalAssignments'),
+                ],
             ],
         ], 200);
     }

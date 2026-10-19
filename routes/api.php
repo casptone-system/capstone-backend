@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ParameterRowCommentController;
 use App\Http\Controllers\Api\ProgramActiveLevelController;
 use App\Http\Controllers\Api\ProgramController;
+use App\Http\Controllers\Api\PublicExplorerController;
 use App\Http\Controllers\Api\QAController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReviewController;
@@ -49,11 +50,22 @@ Route::middleware(['security', 'audit.api'])->group(function () {
     Route::get('/auth/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
     // Public so <img src> can load without a bearer token.
     Route::get('/users/{user}/profile-photo', [AuthController::class, 'profilePhoto']);
+
+    // Public institutional explorer (aggregate-only, no PII).
+    Route::prefix('public')->group(function () {
+        Route::get('analytics', [PublicExplorerController::class, 'analytics']);
+        Route::get('programs', [PublicExplorerController::class, 'programs']);
+        Route::get('departments', [PublicExplorerController::class, 'departments']);
+        Route::get('accreditation-areas', [PublicExplorerController::class, 'accreditationAreas']);
+        Route::get('cycles', [PublicExplorerController::class, 'cycles']);
+    });
 });
 
 Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->withoutMiddleware('verified.api');
     Route::get('/me', [AuthController::class, 'me'])->withoutMiddleware('verified.api');
+    Route::put('/me', [AuthController::class, 'updateProfile']);
+    Route::post('/me/password', [AuthController::class, 'changePassword']);
     Route::get('sync/cursor', [SyncCursorController::class, 'show']);
     Route::get('users/me/areas', [FacultyAreaContentController::class, 'myAreas']);
     Route::get('designation-files', [DesignationFileController::class, 'index']);
@@ -118,6 +130,7 @@ Route::middleware(['auth:sanctum', 'security', 'verified.api', 'rbac', 'audit.ap
     Route::get('accreditor/evidence/colleges/{college}/programs', [AccreditorEvidenceController::class, 'programs']);
     Route::get('accreditor/evidence/programs/{program}/areas', [AccreditorEvidenceController::class, 'areas']);
     Route::get('program-chair/areas', [AccreditationAreaController::class, 'programChairAreas']);
+    Route::get('program-chair/work-distribution', [AccreditationAreaController::class, 'workDistribution']);
     Route::get('program-chair/area-documents', [AccreditationAreaController::class, 'programChairAreaDocuments']);
     Route::get('program-chair/review-documents', [AccreditationAreaController::class, 'programChairReviewDocuments']);
     Route::get('program-chair/areas/{accreditationArea}/documents', [AccreditationAreaController::class, 'programChairAreaDocumentFiles']);

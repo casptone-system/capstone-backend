@@ -910,13 +910,97 @@ class AuthController extends Controller
         ]);
 
         ProfilePhoto::store($user, $request->file('profile_photo'));
+        $request->attributes->set('audit_event', 'profile_photo_updated');
 
         return response()->json([
             'success' => true,
             'message' => 'Profile photo updated successfully.',
             'data' => [
-                'user' => new UserResource($user->fresh()),
+                'user' => new UserResource($user->fresh()->loadMissing(['college:id,name,code', 'program:id,name,code'])),
             ],
+        ], 200);
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
+        }
+
+        $minimumAgeDate = now()->subYears(21)->toDateString();
+
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'max:255'],
+            'middle_name' => ['nullable', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'phone' => ['nullable', 'regex:/^\d{1,12}$/'],
+            'birthdate' => ['nullable', 'date', 'before_or_equal:'.$minimumAgeDate],
+            'sex' => ['nullable', 'in:male,female'],
+        ], [
+            'phone.regex' => 'Phone number must contain numbers only, up to 12 digits.',
+            'birthdate.before_or_equal' => 'You must be at least 21 years old.',
+            'sex.in' => 'Select Male or Female.',
+        ]);
+
+        $user->forceFill([
+            'first_name' => $validated['first_name'],
+            'middle_name' => $validated['middle_name'] ?? null,
+            'last_name' => $validated['last_name'],
+            'name' => trim(sprintf(
+                '%s %s %s',
+                $validated['first_name'],
+                $validated['middle_name'] ?? '',
+                $validated['last_name']
+            )),
+            'phone_number' => $validated['phone'] ?? null,
+            'birth_date' => $validated['birthdate'] ?? null,
+            'sex' => $validated['sex'] ?? null,
+        ])->save();
+
+        $request->attributes->set('audit_event', 'profile_updated');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Profile updated successfully.',
+            'data' => [
+                'user' => new UserResource($user->fresh()->loadMissing(['college:id,name,code', 'program:id,name,code'])),
+            ],
+        ], 200);
+    }
+
+    public function changePassword(Request $request)
+    {
+        $user = $request->user('api') ?? $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
+        }
+
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'confirmed', 'regex:/^(?=.*[A-Z])(?=.*\d).+$/'],
+        ], [
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.regex' => 'Password must include at least one uppercase letter and one number.',
+            'password.confirmed' => 'Password confirmation does not match.',
+        ]);
+
+        if (! Hash::check($validated['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['The current password is incorrect.'],
+            ]);
+        }
+
+        // User model casts password as hashed — assign plain text once.
+        $user->password = $validated['password'];
+        $user->setRememberToken(Str::random(60));
+        $user->save();
+
+        $request->attributes->set('audit_event', 'password_changed');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password changed successfully.',
         ], 200);
     }
 
