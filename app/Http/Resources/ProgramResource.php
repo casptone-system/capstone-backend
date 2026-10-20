@@ -60,7 +60,7 @@ class ProgramResource extends JsonResource
             'activeCycleId' => $this->active_cycle_id,
             'activeLevel' => $this->relationLoaded('activeCycle')
                 ? $this->activeCycle?->level
-                : $this->activeCycle?->level,
+                : null,
             'accreditationStatus' => $this->accreditation_status,
             'complianceScore' => $this->compliance_score,
             'collegeId' => $this->college_id,

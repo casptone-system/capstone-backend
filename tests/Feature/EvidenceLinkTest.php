@@ -197,6 +197,37 @@ class EvidenceLinkTest extends TestCase
             ->assertJsonPath('data.0.hasFile', true);
     }
 
+    public function test_area_members_can_remove_file_evidence_but_outsiders_cannot(): void
+    {
+        ['program' => $program, 'area' => $area, 'row' => $row] = $this->makeRowWithChair();
+        $member = $this->userWithRole(RoleSlug::FACULTY);
+        AreaMember::create(['area_id' => $area->id, 'user_id' => $member->id, 'role' => 'member']);
+        $outsider = $this->userWithRole(RoleSlug::FACULTY);
+
+        $makeFile = fn () => Document::factory()->create([
+            'program_id' => $program->id,
+            'area_id' => $area->id,
+            'content_row_id' => $row->id,
+            'kind' => Document::KIND_FILE,
+            'uploaded_by' => $member->id,
+        ]);
+
+        // Single-file remove (AreaFileThumbnail "x" -> DELETE /documents/{id}).
+        $single = $makeFile();
+        $this->actingAs($outsider)->deleteJson('/api/documents/'.$single->id)->assertForbidden();
+        $this->actingAs($member)->deleteJson('/api/documents/'.$single->id)->assertOk();
+        $this->assertDatabaseMissing('documents', ['id' => $single->id]);
+
+        // Remove-all (row trash -> DELETE /parameter-rows/{row}/documents).
+        $bulk = $makeFile();
+        $this->actingAs($outsider)->deleteJson("/api/parameter-rows/{$row->id}/documents")->assertForbidden();
+        $this->actingAs($member)
+            ->deleteJson("/api/parameter-rows/{$row->id}/documents")
+            ->assertOk()
+            ->assertJsonPath('data.hasFile', false);
+        $this->assertDatabaseMissing('documents', ['id' => $bulk->id]);
+    }
+
     public function test_compiled_pdf_lists_the_link_instead_of_omitting_it(): void
     {
         ['row' => $row, 'chair' => $chair] = $this->makeRowWithChair();

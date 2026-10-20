@@ -37,11 +37,15 @@ if ($frontendOrigin !== '' && str_starts_with($frontendOrigin, 'http')) {
     $configuredOrigins[] = $frontendOrigin;
 }
 
-// Production/staging: only explicit env origins (+ FRONTEND_URL). Local/testing
-// also allow the known Pages hosts and localhost ports used by Vue CLI.
+// Production/staging: explicit env origins (+ FRONTEND_URL) plus the known
+// deployed Pages hosts. The Pages hosts must stay allow-listed in production
+// too — previously they were local-only, so a Render deploy missing
+// CORS_ALLOWED_ORIGINS/FRONTEND_URL answered the SPA (e.g. GET /sync/cursor)
+// with no Access-Control-Allow-Origin header and the browser blocked it.
+// Local/testing additionally allow the localhost ports used by Vue CLI.
 $allowedOrigins = $isLocal
     ? array_values(array_unique(array_merge($localOrigins, $knownHostedOrigins, $configuredOrigins)))
-    : array_values(array_unique($configuredOrigins));
+    : array_values(array_unique(array_merge($knownHostedOrigins, $configuredOrigins)));
 
 $allowedOriginPatterns = [];
 if ($isLocal) {

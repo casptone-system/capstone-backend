@@ -74,10 +74,15 @@ class Program extends Model
 
     /**
      * Return the chair's real user name. Legacy faker `chair` strings are not displayed.
+     * Only reads chairUser when already eager-loaded (Model::preventLazyLoading is on locally).
      */
     public function getChairNameAttribute(): ?string
     {
-        if ($this->chair_id) {
+        if (! $this->chair_id) {
+            return null;
+        }
+
+        if ($this->relationLoaded('chairUser')) {
             return $this->chairUser?->name;
         }
 

@@ -72,7 +72,16 @@ class DocumentPolicy
         if ($document->area_id || $document->content_row_id) {
             $area = $document->area ?: $document->contentRow?->parameter?->area;
 
-            return $user->isChairOfArea($area);
+            // Must match AreaEvidenceGate::assertCanManageEvidence() and the
+            // SPA's canUpload flag (MyAreaResource): the Area Chair *and*
+            // assigned area members may upload, replace, and remove file
+            // evidence. Chair-only link removal is enforced separately in
+            // DocumentController::destroy() / destroyRowDocuments().
+            // Previously this returned isChairOfArea() only, so an assigned
+            // Area In-Charge/member who could upload a file got a 403 when
+            // deleting it (DELETE /documents/{id} and
+            // DELETE /parameter-rows/{row}/documents).
+            return $area !== null && $user->isAssignedToArea($area);
         }
 
         if ($user->isFaculty()) {

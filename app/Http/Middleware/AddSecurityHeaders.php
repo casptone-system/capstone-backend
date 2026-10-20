@@ -123,6 +123,11 @@ class AddSecurityHeaders
             return false;
         }
 
+        // Public profile photos set their own Cache-Control (versioned via ?v=).
+        if ($request->is('api/users/*/profile-photo')) {
+            return false;
+        }
+
         return $request->is('api/*')
             || $request->is('sanctum/csrf-cookie')
             || $request->expectsJson();

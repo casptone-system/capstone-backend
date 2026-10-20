@@ -32,7 +32,7 @@ class CollegeController extends Controller
             return response()->json(['success' => false, 'message' => 'You do not have permission to view colleges.'], 403);
         }
 
-        $colleges = College::with('programs')
+        $colleges = College::with(['programs.chairUser', 'programs.activeCycle'])
             ->when($request->filled('search'), fn ($q) => $q->where('name', 'like', "%{$request->search}%")->orWhere('code', 'like', "%{$request->search}%"))
             ->paginate($request->get('per_page', 15));
 
@@ -116,7 +116,7 @@ class CollegeController extends Controller
             return response()->json(['success' => false, 'message' => 'You do not have permission to view this college.'], 403);
         }
 
-        $college->load('programs');
+        $college->load(['programs.chairUser', 'programs.activeCycle']);
 
         return response()->json([
             'success' => true,
