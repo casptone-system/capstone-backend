@@ -28,3 +28,5 @@ database/*.sqlite
 /storage/app/adams-supabase.env
 /storage/app/adams-supabase-token.env
 database/*.sqlite3
+
+/load-tests/results/
