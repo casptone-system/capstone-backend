@@ -48,6 +48,32 @@ class AuthSecurityTest extends TestCase
         Notification::assertNothingSent();
     }
 
+    public function test_exempt_vpaa_qa_and_accreditor_login_without_a_code(): void
+    {
+        Notification::fake();
+
+        $accounts = [
+            RoleSlug::VPAA => 'vpaa@isu.edu.ph',
+            RoleSlug::QA => 'qa@isu.edu.ph',
+            RoleSlug::ACCREDITOR => 'accreditor@isu.edu.ph',
+        ];
+
+        foreach ($accounts as $role => $email) {
+            $user = $this->userWithRole($role, ['email' => $email]);
+
+            $response = $this->postJson('/api/login', [
+                'email' => $user->email,
+                'password' => 'password',
+            ]);
+
+            $response->assertOk();
+            $this->assertNotEmpty($response->json('data.token'), "{$email} should receive a token directly.");
+            $this->assertEmpty($response->json('data.challenge_token'), "{$email} should not receive an OTP challenge.");
+        }
+
+        Notification::assertNothingSent();
+    }
+
     public function test_dean_login_returns_a_challenge_instead_of_a_token(): void
     {
         Notification::fake();

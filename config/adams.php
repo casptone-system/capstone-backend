@@ -45,11 +45,22 @@ return [
         'qa,vpaa,dean,program-chair,accreditor,faculty,area-in-charge'
     )),
 
-    // Emails that skip the login OTP (break-glass accounts).
-    'two_factor_exempt_emails' => array_map(
+    // Emails that skip the login OTP (break-glass accounts). Built-ins are
+    // always exempt so a host env var cannot accidentally remove them;
+    // AUTH_2FA_EXEMPT_EMAILS can only add more.
+    'two_factor_exempt_emails' => array_values(array_unique(array_map(
         static fn (string $email): string => strtolower($email),
-        $parseCsv((string) env('AUTH_2FA_EXEMPT_EMAILS', 'admin@example.com,superadmin@isu.edu.ph'))
-    ),
+        array_merge(
+            [
+                'admin@example.com',
+                'superadmin@isu.edu.ph',
+                'vpaa@isu.edu.ph',
+                'qa@isu.edu.ph',
+                'accreditor@isu.edu.ph',
+            ],
+            $parseCsv((string) env('AUTH_2FA_EXEMPT_EMAILS', ''))
+        )
+    ))),
 
     'institutional_email_domain' => strtolower((string) env('INSTITUTIONAL_EMAIL_DOMAIN', 'isu.edu.ph')),
 
